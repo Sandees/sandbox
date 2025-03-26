@@ -158,6 +158,125 @@ results = search_client.search(
     top=5
 )
 
+
+
+from databricks_genai_inference import ChatCompletion
+import re
+
+llm_model = "databricks-meta-llama-3-70b-instruct"
+
+def generate_filter_from_query_llm(query_text):
+    """
+    Uses an LLM to generate an OData filter based on the user's query text.
+    The filter should use available boolean fields such as:
+       - financial_information
+       - pii_detected
+       - external_contacts
+       - home_addresses
+       - client_contracts
+       - strategic_documents
+    If no filter is relevant, the LLM should return an empty string.
+    """
+    prompt = f"""
+    You are an expert in generating OData filters for Azure AI Search.
+    The search index contains boolean fields:
+      - financial_information
+      - pii_detected
+      - external_contacts
+      - home_addresses
+      - client_contracts
+      - strategic_documents
+
+    Given the following query text: "{query_text}"
+    Analyze the query and generate an appropriate OData filter condition.
+    For example, if the query mentions "pricing", "profit margins", or "cost", return: financial_information eq true.
+    If the query mentions sensitive data or personal information, return: pii_detected eq true.
+    If there is no relevant filter, return an empty string.
+    Return only the OData filter string without any extra commentary.
+    """
+    
+    response = ChatCompletion.create(
+        model=llm_model,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=100,
+        temperature=0.0
+    )
+    
+    # Extract the filter string from the response (cleaning any extraneous text)
+    filter_condition = response.message.content.strip()
+    # Optional: clean up any markdown formatting or quotes if necessary
+    filter_condition = re.sub(r'(^"|"$)', '', filter_condition)
+    return filter_condition
+
+# Example usage:
+user_query = "Show me emails about pricing strategies and profit margins"
+dynamic_filter = generate_filter_from_query_llm(user_query)
+print("Generated Filter:", dynamic_filter)
+
+
 print("\nHybrid Search Results:")
 for result in results:
     print(f"ID: {result['email_id']}, Subject: {result['subject']}, Sender: {result['sender']}")
+
+
+
+
+# Step 1: Perform the hybrid search query
+query_text = "profit margins pricing"
+query_vector = embedding_model.encode(query_text).tolist()
+
+results = search_client.search(
+    search_text=query_text,
+    query_type="semantic",
+    semantic_configuration_name="semantic-config",
+    vector_queries=[{
+        "vector": query_vector,
+        "fields": "semantic_vector",
+        "k": 10  # Retrieve more than 5 in case we need to sort by score
+    }],
+    # Optionally, you can add a filter here if needed
+    select=["email_id", "subject", "sender", "email_body"],
+    top=10
+)
+
+# Step 2: Collect results and sort by reranker score (descending)
+results_list = [doc for doc in results]
+# Convert reranker score to float if available; if missing, default to 0
+sorted_results = sorted(
+    results_list, 
+    key=lambda r: float(r.get("@search.rerankerScore", 0)), 
+    reverse=True
+)
+top_5 = sorted_results[:5]
+
+# Step 3: Build the prompt text using details from the top 5 results
+emails_text = ""
+for idx, res in enumerate(top_5):
+    subject = res.get("subject", "No Subject")
+    sender = res.get("sender", "No Sender")
+    # If email_body isn't available, you might use subject or a summary field instead.
+    body = res.get("email_body", "No additional details provided")
+    score = res.get("@search.rerankerScore", "N/A")
+    emails_text += f"Email {idx+1}:\nSubject: {subject}\nSender: {sender}\nReranker Score: {score}\nDetails: {body}\n\n"
+
+prompt = f"""Summarize the following 5 emails. Provide a concise overall summary that captures the key points and any recurring themes.
+
+{emails_text}
+
+Summary:"""
+
+# Step 4: Use your Databricks-hosted LLM (Llama 3) to generate the summary
+from databricks_genai_inference import ChatCompletion
+
+llm_model = "databricks-meta-llama-3-70b-instruct"
+
+response = ChatCompletion.create(
+    model=llm_model,
+    messages=[{"role": "user", "content": prompt}],
+    max_tokens=300,
+    temperature=0.0
+)
+
+summary = response.message.content
+print("Summary of Top 5 Emails:")
+print(summary)
