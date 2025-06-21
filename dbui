@@ -1,0 +1,382 @@
+# Databricks notebook source
+# MAGIC %md
+# MAGIC # MITRE ATT&CK SPL Query Analyzer
+# MAGIC 
+# MAGIC This notebook provides an interactive UI for analyzing SPL queries against the MITRE ATT&CK framework using LLM.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Setup and Imports
+
+# COMMAND ----------
+
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
+import json
+import base64
+import tempfile
+import os
+
+# Initialize workspace client
+w = WorkspaceClient()
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## File Upload UI
+# MAGIC 
+# MAGIC Use the cell below to upload your SPL query file
+
+# COMMAND ----------
+
+# MAGIC %html
+# MAGIC <!DOCTYPE html>
+# MAGIC <html>
+# MAGIC <head>
+# MAGIC     <style>
+# MAGIC         .upload-container {
+# MAGIC             border: 2px dashed #007acc;
+# MAGIC             border-radius: 10px;
+# MAGIC             padding: 40px;
+# MAGIC             text-align: center;
+# MAGIC             background: #f8f9fa;
+# MAGIC             margin: 20px 0;
+# MAGIC             transition: all 0.3s ease;
+# MAGIC         }
+# MAGIC         .upload-container:hover {
+# MAGIC             background: #e3f2fd;
+# MAGIC             border-color: #0056b3;
+# MAGIC         }
+# MAGIC         .upload-btn {
+# MAGIC             background: #007acc;
+# MAGIC             color: white;
+# MAGIC             border: none;
+# MAGIC             padding: 12px 24px;
+# MAGIC             border-radius: 6px;
+# MAGIC             cursor: pointer;
+# MAGIC             font-size: 16px;
+# MAGIC             margin: 10px;
+# MAGIC         }
+# MAGIC         .upload-btn:hover {
+# MAGIC             background: #0056b3;
+# MAGIC         }
+# MAGIC         .file-info {
+# MAGIC             margin-top: 20px;
+# MAGIC             padding: 15px;
+# MAGIC             background: #d4edda;
+# MAGIC             border-radius: 6px;
+# MAGIC             border-left: 4px solid #28a745;
+# MAGIC             display: none;
+# MAGIC         }
+# MAGIC         .file-preview {
+# MAGIC             margin-top: 20px;
+# MAGIC             padding: 15px;
+# MAGIC             background: #f1f3f4;
+# MAGIC             border-radius: 6px;
+# MAGIC             max-height: 300px;
+# MAGIC             overflow-y: auto;
+# MAGIC             text-align: left;
+# MAGIC             font-family: monospace;
+# MAGIC             display: none;
+# MAGIC         }
+# MAGIC         .analyze-btn {
+# MAGIC             background: #28a745;
+# MAGIC             color: white;
+# MAGIC             border: none;
+# MAGIC             padding: 15px 30px;
+# MAGIC             border-radius: 6px;
+# MAGIC             cursor: pointer;
+# MAGIC             font-size: 18px;
+# MAGIC             margin: 20px;
+# MAGIC         }
+# MAGIC         .analyze-btn:hover {
+# MAGIC             background: #218838;
+# MAGIC         }
+# MAGIC         .analyze-btn:disabled {
+# MAGIC             background: #6c757d;
+# MAGIC             cursor: not-allowed;
+# MAGIC         }
+# MAGIC     </style>
+# MAGIC </head>
+# MAGIC <body>
+# MAGIC     <div class="upload-container">
+# MAGIC         <h2>📁 Upload SPL Query File</h2>
+# MAGIC         <p>Select your SPL query file for MITRE ATT&CK analysis</p>
+# MAGIC         <input type="file" id="fileInput" style="display: none;" accept=".txt,.spl,.json,.csv">
+# MAGIC         <button class="upload-btn" onclick="document.getElementById('fileInput').click()">
+# MAGIC             Choose File
+# MAGIC         </button>
+# MAGIC         <div id="fileInfo" class="file-info">
+# MAGIC             <strong>File:</strong> <span id="fileName"></span><br>
+# MAGIC             <strong>Size:</strong> <span id="fileSize"></span>
+# MAGIC         </div>
+# MAGIC         <div id="filePreview" class="file-preview">
+# MAGIC             <strong>Preview:</strong><br>
+# MAGIC             <pre id="previewContent"></pre>
+# MAGIC         </div>
+# MAGIC         <button class="analyze-btn" id="analyzeBtn" onclick="analyzeFile()" disabled>
+# MAGIC             🔍 Analyze with LLM
+# MAGIC         </button>
+# MAGIC     </div>
+# MAGIC 
+# MAGIC     <script>
+# MAGIC         let fileContent = '';
+# MAGIC         let fileName = '';
+# MAGIC 
+# MAGIC         document.getElementById('fileInput').addEventListener('change', function(e) {
+# MAGIC             const file = e.target.files[0];
+# MAGIC             if (file) {
+# MAGIC                 fileName = file.name;
+# MAGIC                 document.getElementById('fileName').textContent = file.name;
+# MAGIC                 document.getElementById('fileSize').textContent = formatFileSize(file.size);
+# MAGIC                 document.getElementById('fileInfo').style.display = 'block';
+# MAGIC                 
+# MAGIC                 const reader = new FileReader();
+# MAGIC                 reader.onload = function(e) {
+# MAGIC                     fileContent = e.target.result;
+# MAGIC                     const preview = fileContent.length > 500 ? 
+# MAGIC                         fileContent.substring(0, 500) + '\n... (truncated)' : fileContent;
+# MAGIC                     document.getElementById('previewContent').textContent = preview;
+# MAGIC                     document.getElementById('filePreview').style.display = 'block';
+# MAGIC                     document.getElementById('analyzeBtn').disabled = false;
+# MAGIC                 };
+# MAGIC                 reader.readAsText(file);
+# MAGIC             }
+# MAGIC         });
+# MAGIC 
+# MAGIC         function formatFileSize(bytes) {
+# MAGIC             if (bytes === 0) return '0 Bytes';
+# MAGIC             const k = 1024;
+# MAGIC             const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+# MAGIC             const i = Math.floor(Math.log(bytes) / Math.log(k));
+# MAGIC             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+# MAGIC         }
+# MAGIC 
+# MAGIC         function analyzeFile() {
+# MAGIC             if (!fileContent) {
+# MAGIC                 alert('Please select a file first');
+# MAGIC                 return;
+# MAGIC             }
+# MAGIC             
+# MAGIC             // Store file content in notebook variable
+# MAGIC             IPython.notebook.kernel.execute(`
+# MAGIC uploaded_file_content = """${fileContent.replace(/"/g, '\\"')}"""
+# MAGIC uploaded_file_name = "${fileName}"
+# MAGIC print(f"File uploaded: {uploaded_file_name}")
+# MAGIC print("Content length:", len(uploaded_file_content))
+# MAGIC             `);
+# MAGIC             
+# MAGIC             alert('File uploaded successfully! Run the analysis cell below.');
+# MAGIC         }
+# MAGIC     </script>
+# MAGIC </body>
+# MAGIC </html>
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Analysis Function
+# MAGIC 
+# MAGIC This function will analyze your uploaded SPL query against MITRE ATT&CK framework
+
+# COMMAND ----------
+
+def analyze_spl_query_with_llm(file_content, file_name):
+    """
+    Analyze SPL query against MITRE ATT&CK framework using LLM
+    """
+    
+    # Build the system message (similar to your original code)
+    system_msg = ChatMessage(role=ChatMessageRole.SYSTEM, content=(
+        "You are a security-focused assistant. "
+        "Your task is to review the provided SPL and drill down spl query against the MITRE ATTACK technique JSON "
+        "and tell what is not covered by spl and any changes needed to fully detect that technique."
+    ))
+    
+    # Build user content with the file data
+    user_content = f"""### MITRE ATTACK Technique
+{json.dumps({"technique": "sample_mitre_data"}, indent=2)}
+
+### SPL Query
+{file_content}
+
+### SPL drill down query
+{file_content}
+
+### README Draft
+{file_name}
+
+Please:
+1. Tell me what is not covered by spl or if my spl has any mistakes and any changes needed to fully detect the attack technique."""
+    
+    user_msg = ChatMessage(role=ChatMessageRole.USER, content=user_content)
+    
+    try:
+        # Call the LLM (replace with your actual model name)
+        response = w.serving_endpoints.query(
+            name="databricks-meta-llama-3-70b-instruct",  # Replace with your model
+            messages=[system_msg, user_msg],
+            temperature=0.1,
+            max_tokens=2048
+        )
+        
+        return response.choices[0].message.content
+    
+    except Exception as e:
+        return f"Error during analysis: {str(e)}"
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Run Analysis
+# MAGIC 
+# MAGIC Execute this cell after uploading your file above
+
+# COMMAND ----------
+
+# Check if file has been uploaded
+try:
+    if 'uploaded_file_content' in locals() and 'uploaded_file_name' in locals():
+        print("🔍 Analyzing SPL query against MITRE ATT&CK framework...")
+        print("=" * 60)
+        
+        # Perform the analysis
+        analysis_result = analyze_spl_query_with_llm(uploaded_file_content, uploaded_file_name)
+        
+        print("📊 ANALYSIS RESULTS:")
+        print("=" * 60)
+        print(analysis_result)
+        
+    else:
+        print("⚠️ No file uploaded yet. Please use the upload interface above.")
+        
+except NameError:
+    print("⚠️ No file uploaded yet. Please use the upload interface above.")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Alternative: Direct File Upload via Databricks Widgets
+
+# COMMAND ----------
+
+# Alternative method using Databricks widgets
+dbutils.widgets.text("spl_query", "", "Paste your SPL query here:")
+dbutils.widgets.text("mitre_technique", "", "MITRE technique ID (e.g., T1055):")
+
+# COMMAND ----------
+
+# Get widget values and analyze
+spl_query = dbutils.widgets.get("spl_query")
+mitre_technique = dbutils.widgets.get("mitre_technique")
+
+if spl_query and mitre_technique:
+    print(f"🎯 Analyzing SPL query for MITRE technique: {mitre_technique}")
+    print("=" * 60)
+    
+    # You can also load MITRE data from a file or API
+    analysis_result = analyze_spl_query_with_llm(spl_query, f"Query for {mitre_technique}")
+    
+    print("📊 ANALYSIS RESULTS:")
+    print("=" * 60)
+    print(analysis_result)
+else:
+    print("Please fill in both the SPL query and MITRE technique widgets above.")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Advanced: Load MITRE ATT&CK Data from File
+
+# COMMAND ----------
+
+# Function to load MITRE data from uploaded files
+def load_mitre_data_from_file(file_path):
+    """
+    Load MITRE ATT&CK data from JSON file
+    """
+    try:
+        with open(file_path, 'r') as f:
+            mitre_data = json.load(f)
+        return mitre_data
+    except Exception as e:
+        print(f"Error loading MITRE data: {e}")
+        return None
+
+# Example usage:
+# mitre_data = load_mitre_data_from_file("/path/to/your/mitre_data.json")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Batch Analysis Function
+
+# COMMAND ----------
+
+def batch_analyze_spl_queries(queries_dict):
+    """
+    Analyze multiple SPL queries at once
+    
+    Args:
+        queries_dict: Dictionary with format {"technique_id": "spl_query"}
+    """
+    results = {}
+    
+    for technique_id, spl_query in queries_dict.items():
+        print(f"🔍 Analyzing {technique_id}...")
+        result = analyze_spl_query_with_llm(spl_query, technique_id)
+        results[technique_id] = result
+        print(f"✅ Completed {technique_id}")
+        print("-" * 40)
+    
+    return results
+
+# Example usage:
+# queries = {
+#     "T1055": "your spl query for process injection",
+#     "T1082": "your spl query for system info discovery"
+# }
+# batch_results = batch_analyze_spl_queries(queries)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Save Results to File
+
+# COMMAND ----------
+
+def save_analysis_results(results, output_path="/tmp/mitre_analysis_results.json"):
+    """
+    Save analysis results to a JSON file
+    """
+    try:
+        with open(output_path, 'w') as f:
+            json.dump(results, f, indent=2)
+        print(f"✅ Results saved to: {output_path}")
+        
+        # Also save to DBFS for persistence
+        dbfs_path = "/FileStore/shared_uploads/mitre_analysis_results.json"
+        dbutils.fs.cp(f"file:{output_path}", dbfs_path)
+        print(f"✅ Results also saved to DBFS: {dbfs_path}")
+        
+    except Exception as e:
+        print(f"Error saving results: {e}")
+
+# Example usage:
+# save_analysis_results({"T1055": "analysis result here"})
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Usage Instructions
+# MAGIC 
+# MAGIC 1. **Upload File Method**: Use the HTML interface above to upload your SPL query file, then run the analysis cell
+# MAGIC 
+# MAGIC 2. **Widget Method**: Use the Databricks widgets to paste your SPL query directly
+# MAGIC 
+# MAGIC 3. **Batch Analysis**: Use the batch function to analyze multiple queries at once
+# MAGIC 
+# MAGIC 4. **Customize**: Modify the `analyze_spl_query_with_llm` function to match your specific MITRE data format and LLM endpoint
+# MAGIC 
+# MAGIC **Note**: Replace `"databricks-meta-llama-3-70b-instruct"` with your actual model endpoint name.
