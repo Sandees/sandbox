@@ -1,36 +1,534 @@
+# Databricks notebook source
+# MAGIC %md
+# MAGIC # MITRE ATT&CK SPL Query Analyzer - Table Version
+# MAGIC 
+# MAGIC Interactive UI to select MITRE techniques from your table and analyze SPL queries
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Setup and Data Loading
+
+# COMMAND ----------
+
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
 import json
+from pyspark.sql import functions as F
 
-# Your file location
-file_path = "/workspace/Users/nanditha..com/uc_data.json"
+# Initialize workspace client
+w = WorkspaceClient()
 
-# Read the JSON file
-try:
-    with open(f"/dbfs{file_path}", 'r') as f:
-        mitre_data = json.load(f)
-    
-    print("✅ MITRE data loaded successfully!")
-    print(f"📊 Data type: {type(mitre_data)}")
-    
-    # Display structure info
-    if isinstance(mitre_data, dict):
-        print(f"🔑 Available keys: {list(mitre_data.keys())}")
+# Load your data table
+df = spark.table("hive_metastore.default.uc_data_nanditha")
+
+# Get list of all MITRE IDs for dropdown
+mitre_ids = df.select("mitre_id").distinct().orderBy("mitre_id").collect()
+mitre_id_list = [row.mitre_id for row in mitre_ids]
+
+print(f"✅ Loaded {df.count()} records from table")
+print(f"📊 Found {len(mitre_id_list)} unique MITRE IDs")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Interactive MITRE Technique Selector
+
+# COMMAND ----------
+
+# MAGIC %html
+# MAGIC <!DOCTYPE html>
+# MAGIC <html>
+# MAGIC <head>
+# MAGIC     <style>
+# MAGIC         .container {
+# MAGIC             max-width: 1200px;
+# MAGIC             margin: 20px auto;
+# MAGIC             padding: 20px;
+# MAGIC             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+# MAGIC         }
+# MAGIC         .header {
+# MAGIC             background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
+# MAGIC             color: white;
+# MAGIC             padding: 25px;
+# MAGIC             border-radius: 10px;
+# MAGIC             text-align: center;
+# MAGIC             margin-bottom: 30px;
+# MAGIC         }
+# MAGIC         .section {
+# MAGIC             background: #f8f9fa;
+# MAGIC             border: 1px solid #dee2e6;
+# MAGIC             border-radius: 10px;
+# MAGIC             padding: 25px;
+# MAGIC             margin-bottom: 20px;
+# MAGIC         }
+# MAGIC         .dropdown-container {
+# MAGIC             margin-bottom: 20px;
+# MAGIC         }
+# MAGIC         .dropdown-container label {
+# MAGIC             display: block;
+# MAGIC             font-weight: bold;
+# MAGIC             margin-bottom: 8px;
+# MAGIC             color: #2c3e50;
+# MAGIC         }
+# MAGIC         .dropdown {
+# MAGIC             width: 100%;
+# MAGIC             padding: 12px;
+# MAGIC             font-size: 16px;
+# MAGIC             border: 2px solid #bdc3c7;
+# MAGIC             border-radius: 8px;
+# MAGIC             background: white;
+# MAGIC         }
+# MAGIC         .dropdown:focus {
+# MAGIC             border-color: #3498db;
+# MAGIC             outline: none;
+# MAGIC         }
+# MAGIC         .technique-info {
+# MAGIC             background: #e8f4f8;
+# MAGIC             border-left: 4px solid #3498db;
+# MAGIC             padding: 15px;
+# MAGIC             margin: 15px 0;
+# MAGIC             border-radius: 0 8px 8px 0;
+# MAGIC         }
+# MAGIC         .spl-query-box {
+# MAGIC             background: #2c3e50;
+# MAGIC             color: #ecf0f1;
+# MAGIC             padding: 20px;
+# MAGIC             border-radius: 8px;
+# MAGIC             font-family: 'Courier New', monospace;
+# MAGIC             font-size: 14px;
+# MAGIC             line-height: 1.4;
+# MAGIC             overflow-x: auto;
+# MAGIC             white-space: pre-wrap;
+# MAGIC             max-height: 300px;
+# MAGIC             overflow-y: auto;
+# MAGIC         }
+# MAGIC         .analyze-btn {
+# MAGIC             background: linear-gradient(135deg, #27ae60, #2ecc71);
+# MAGIC             color: white;
+# MAGIC             border: none;
+# MAGIC             padding: 15px 30px;
+# MAGIC             font-size: 18px;
+# MAGIC             font-weight: bold;
+# MAGIC             border-radius: 8px;
+# MAGIC             cursor: pointer;
+# MAGIC             transition: all 0.3s ease;
+# MAGIC             margin: 20px 0;
+# MAGIC             display: block;
+# MAGIC             width: 100%;
+# MAGIC         }
+# MAGIC         .analyze-btn:hover {
+# MAGIC             transform: translateY(-2px);
+# MAGIC             box-shadow: 0 4px 15px rgba(39, 174, 96, 0.3);
+# MAGIC         }
+# MAGIC         .analyze-btn:disabled {
+# MAGIC             background: #95a5a6;
+# MAGIC             cursor: not-allowed;
+# MAGIC             transform: none;
+# MAGIC         }
+# MAGIC         .loading {
+# MAGIC             display: none;
+# MAGIC             text-align: center;
+# MAGIC             padding: 20px;
+# MAGIC         }
+# MAGIC         .spinner {
+# MAGIC             border: 4px solid #f3f3f3;
+# MAGIC             border-top: 4px solid #3498db;
+# MAGIC             border-radius: 50%;
+# MAGIC             width: 40px;
+# MAGIC             height: 40px;
+# MAGIC             animation: spin 1s linear infinite;
+# MAGIC             margin: 0 auto 15px;
+# MAGIC         }
+# MAGIC         @keyframes spin {
+# MAGIC             0% { transform: rotate(0deg); }
+# MAGIC             100% { transform: rotate(360deg); }
+# MAGIC         }
+# MAGIC         .results-section {
+# MAGIC             display: none;
+# MAGIC             background: #ffffff;
+# MAGIC             border: 2px solid #e9ecef;
+# MAGIC             border-radius: 10px;
+# MAGIC             margin-top: 20px;
+# MAGIC         }
+# MAGIC         .results-header {
+# MAGIC             background: linear-gradient(135deg, #8e44ad, #9b59b6);
+# MAGIC             color: white;
+# MAGIC             padding: 15px 20px;
+# MAGIC             font-weight: bold;
+# MAGIC             font-size: 18px;
+# MAGIC             border-radius: 8px 8px 0 0;
+# MAGIC         }
+# MAGIC         .results-content {
+# MAGIC             padding: 25px;
+# MAGIC             max-height: 500px;
+# MAGIC             overflow-y: auto;
+# MAGIC             white-space: pre-wrap;
+# MAGIC             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+# MAGIC             line-height: 1.6;
+# MAGIC         }
+# MAGIC         .hidden {
+# MAGIC             display: none;
+# MAGIC         }
+# MAGIC         .info-grid {
+# MAGIC             display: grid;
+# MAGIC             grid-template-columns: 1fr 1fr;
+# MAGIC             gap: 15px;
+# MAGIC             margin: 15px 0;
+# MAGIC         }
+# MAGIC         .info-item {
+# MAGIC             background: white;
+# MAGIC             padding: 10px;
+# MAGIC             border-radius: 6px;
+# MAGIC             border-left: 3px solid #3498db;
+# MAGIC         }
+# MAGIC         .info-label {
+# MAGIC             font-weight: bold;
+# MAGIC             color: #2c3e50;
+# MAGIC             font-size: 12px;
+# MAGIC             text-transform: uppercase;
+# MAGIC         }
+# MAGIC         .info-value {
+# MAGIC             color: #34495e;
+# MAGIC             margin-top: 5px;
+# MAGIC         }
+# MAGIC     </style>
+# MAGIC </head>
+# MAGIC <body>
+# MAGIC     <div class="container">
+# MAGIC         <div class="header">
+# MAGIC             <h1>🛡️ MITRE ATT&CK SPL Query Analyzer</h1>
+# MAGIC             <p>Select a MITRE technique to analyze its SPL query</p>
+# MAGIC         </div>
+# MAGIC 
+# MAGIC         <div class="section">
+# MAGIC             <div class="dropdown-container">
+# MAGIC                 <label for="mitreSelect">🎯 Select MITRE Technique:</label>
+# MAGIC                 <select id="mitreSelect" class="dropdown" onchange="loadTechniqueData()">
+# MAGIC                     <option value="">-- Select a MITRE Technique --</option>
+# MAGIC                 </select>
+# MAGIC             </div>
+# MAGIC         </div>
+# MAGIC 
+# MAGIC         <div id="techniqueSection" class="section hidden">
+# MAGIC             <h3>📋 Technique Information</h3>
+# MAGIC             <div class="technique-info">
+# MAGIC                 <div class="info-grid">
+# MAGIC                     <div class="info-item">
+# MAGIC                         <div class="info-label">Technique Name</div>
+# MAGIC                         <div class="info-value" id="techniqueName">-</div>
+# MAGIC                     </div>
+# MAGIC                     <div class="info-item">
+# MAGIC                         <div class="info-label">Tactic</div>
+# MAGIC                         <div class="info-value" id="techniqueTactic">-</div>
+# MAGIC                     </div>
+# MAGIC                     <div class="info-item">
+# MAGIC                         <div class="info-label">Platform</div>
+# MAGIC                         <div class="info-value" id="techniquePlatform">-</div>
+# MAGIC                     </div>
+# MAGIC                     <div class="info-item">
+# MAGIC                         <div class="info-label">Domain</div>
+# MAGIC                         <div class="info-value" id="techniqueDomain">-</div>
+# MAGIC                     </div>
+# MAGIC                 </div>
+# MAGIC                 <div style="margin-top: 15px;">
+# MAGIC                     <div class="info-label">Description</div>
+# MAGIC                     <div class="info-value" id="techniqueDescription">-</div>
+# MAGIC                 </div>
+# MAGIC             </div>
+# MAGIC         </div>
+# MAGIC 
+# MAGIC         <div id="splSection" class="section hidden">
+# MAGIC             <h3>🔍 SPL Query</h3>
+# MAGIC             <div class="spl-query-box" id="splQueryBox">
+# MAGIC                 Select a MITRE technique to view its SPL query
+# MAGIC             </div>
+# MAGIC             
+# MAGIC             <button class="analyze-btn" id="analyzeBtn" onclick="analyzeWithLLM()" disabled>
+# MAGIC                 🚀 Analyze with LLM
+# MAGIC             </button>
+# MAGIC         </div>
+# MAGIC 
+# MAGIC         <div class="loading" id="loading">
+# MAGIC             <div class="spinner"></div>
+# MAGIC             <p>🤖 Analyzing SPL query against MITRE ATT&CK framework...</p>
+# MAGIC         </div>
+# MAGIC 
+# MAGIC         <div class="results-section" id="resultsSection">
+# MAGIC             <div class="results-header">
+# MAGIC                 🎯 LLM Analysis Results
+# MAGIC             </div>
+# MAGIC             <div class="results-content" id="resultsContent"></div>
+# MAGIC         </div>
+# MAGIC     </div>
+# MAGIC 
+# MAGIC     <script>
+# MAGIC         let currentTechniqueData = null;
+# MAGIC         let mitreData = {};
+# MAGIC 
+# MAGIC         // Initialize when page loads
+# MAGIC         window.onload = function() {
+# MAGIC             loadMitreIds();
+# MAGIC         };
+# MAGIC 
+# MAGIC         function loadMitreIds() {
+# MAGIC             // This will be populated by Python
+# MAGIC             console.log("Loading MITRE IDs...");
+# MAGIC         }
+# MAGIC 
+# MAGIC         function loadTechniqueData() {
+# MAGIC             const selectedId = document.getElementById('mitreSelect').value;
+# MAGIC             
+# MAGIC             if (!selectedId) {
+# MAGIC                 hideAllSections();
+# MAGIC                 return;
+# MAGIC             }
+# MAGIC 
+# MAGIC             // Call Python to get technique data
+# MAGIC             IPython.notebook.kernel.execute(`
+# MAGIC selected_mitre_id = "${selectedId}"
+# MAGIC technique_data = get_technique_data("${selectedId}")
+# MAGIC print("Selected technique:", selected_mitre_id)
+# MAGIC             `);
+# MAGIC 
+# MAGIC             // Show loading and wait for data
+# MAGIC             setTimeout(() => {
+# MAGIC                 IPython.notebook.kernel.execute(`
+# MAGIC js_code = f'''
+# MAGIC displayTechniqueData({json.dumps(technique_data) if 'technique_data' in locals() else '{}'});
+# MAGIC '''
+# MAGIC display(HTML(f'<script>{js_code}</script>'))
+# MAGIC             `);
+# MAGIC             }, 500);
+# MAGIC         }
+# MAGIC 
+# MAGIC         function displayTechniqueData(data) {
+# MAGIC             if (!data || Object.keys(data).length === 0) {
+# MAGIC                 console.error("No technique data received");
+# MAGIC                 return;
+# MAGIC             }
+# MAGIC 
+# MAGIC             currentTechniqueData = data;
+# MAGIC 
+# MAGIC             // Update technique information
+# MAGIC             document.getElementById('techniqueName').textContent = data.technique_name || 'N/A';
+# MAGIC             document.getElementById('techniqueTactic').textContent = data.tactics || 'N/A';
+# MAGIC             document.getElementById('techniquePlatform').textContent = data.platforms || 'N/A';
+# MAGIC             document.getElementById('techniqueDomain').textContent = data.domain || 'N/A';
+# MAGIC             document.getElementById('techniqueDescription').textContent = data.description || 'N/A';
+# MAGIC 
+# MAGIC             // Update SPL query
+# MAGIC             document.getElementById('splQueryBox').textContent = data.spl_query || 'No SPL query available';
+# MAGIC 
+# MAGIC             // Show sections
+# MAGIC             document.getElementById('techniqueSection').classList.remove('hidden');
+# MAGIC             document.getElementById('splSection').classList.remove('hidden');
+# MAGIC             document.getElementById('analyzeBtn').disabled = false;
+# MAGIC 
+# MAGIC             // Hide results from previous analysis
+# MAGIC             document.getElementById('resultsSection').style.display = 'none';
+# MAGIC         }
+# MAGIC 
+# MAGIC         function hideAllSections() {
+# MAGIC             document.getElementById('techniqueSection').classList.add('hidden');
+# MAGIC             document.getElementById('splSection').classList.add('hidden');
+# MAGIC             document.getElementById('resultsSection').style.display = 'none';
+# MAGIC             document.getElementById('analyzeBtn').disabled = true;
+# MAGIC         }
+# MAGIC 
+# MAGIC         function analyzeWithLLM() {
+# MAGIC             if (!currentTechniqueData) {
+# MAGIC                 alert('Please select a MITRE technique first');
+# MAGIC                 return;
+# MAGIC             }
+# MAGIC 
+# MAGIC             // Show loading
+# MAGIC             document.getElementById('loading').style.display = 'block';
+# MAGIC             document.getElementById('resultsSection').style.display = 'none';
+# MAGIC             document.getElementById('analyzeBtn').disabled = true;
+# MAGIC 
+# MAGIC             // Call Python LLM analysis
+# MAGIC             IPython.notebook.kernel.execute(`
+# MAGIC print("🔍 Starting LLM analysis...")
+# MAGIC analysis_result = analyze_technique_with_llm(selected_mitre_id)
+# MAGIC print("✅ Analysis complete")
+# MAGIC             `);
+# MAGIC 
+# MAGIC             // Wait for analysis and display results
+# MAGIC             setTimeout(() => {
+# MAGIC                 IPython.notebook.kernel.execute(`
+# MAGIC js_code = f'''
+# MAGIC showAnalysisResults("""{analysis_result.replace('"""', '')}""");
+# MAGIC '''
+# MAGIC display(HTML(f'<script>{js_code}</script>'))
+# MAGIC             `);
+# MAGIC             }, 3000);
+# MAGIC         }
+# MAGIC 
+# MAGIC         function showAnalysisResults(results) {
+# MAGIC             document.getElementById('loading').style.display = 'none';
+# MAGIC             document.getElementById('resultsContent').textContent = results;
+# MAGIC             document.getElementById('resultsSection').style.display = 'block';
+# MAGIC             document.getElementById('analyzeBtn').disabled = false;
+# MAGIC         }
+# MAGIC     </script>
+# MAGIC </body>
+# MAGIC </html>
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Python Functions for Data Handling
+
+# COMMAND ----------
+
+def get_technique_data(mitre_id):
+    """
+    Get technique data for selected MITRE ID
+    """
+    try:
+        # Query the table for the specific MITRE ID
+        technique_row = df.filter(F.col("mitre_id") == mitre_id).first()
         
-        # If it has techniques
-        if 'techniques' in mitre_data:
-            print(f"📈 Number of techniques: {len(mitre_data['techniques'])}")
-        elif 'objects' in mitre_data:
-            print(f"📈 Number of objects: {len(mitre_data['objects'])}")
-            
-    elif isinstance(mitre_data, list):
-        print(f"📈 Number of items: {len(mitre_data)}")
-        if len(mitre_data) > 0:
-            print(f"🔍 First item keys: {list(mitre_data[0].keys()) if isinstance(mitre_data[0], dict) else 'Not a dict'}")
+        if technique_row:
+            return {
+                "mitre_id": technique_row.mitre_id,
+                "technique_name": technique_row.technique_name,
+                "description": technique_row.description,
+                "tactics": technique_row.tactics,
+                "platforms": technique_row.platforms,
+                "domain": technique_row.domain,
+                "spl_query": technique_row.spl_query,
+                "detection": technique_row.detection,
+                "drill_down_spl": technique_row.drill_down_spl if hasattr(technique_row, 'drill_down_spl') else ""
+            }
+        else:
+            return {}
+    except Exception as e:
+        print(f"Error getting technique data: {e}")
+        return {}
+
+# COMMAND ----------
+
+def analyze_technique_with_llm(mitre_id):
+    """
+    Analyze the selected technique with LLM
+    """
+    try:
+        # Get the technique data
+        technique_data = get_technique_data(mitre_id)
+        
+        if not technique_data:
+            return "Error: Could not find technique data"
+        
+        # Build the system message
+        system_msg = ChatMessage(role=ChatMessageRole.SYSTEM, content=(
+            "You are a security-focused assistant. "
+            "Your task is to review the provided SPL and drill down SPL query against the MITRE ATT&CK technique "
+            "and tell what is not covered by SPL and any changes needed to fully detect that technique."
+        ))
+        
+        # Build user content with the technique data
+        user_content = f"""### MITRE ATT&CK Technique
+Technique ID: {technique_data['mitre_id']}
+Technique Name: {technique_data['technique_name']}
+Description: {technique_data['description']}
+Tactics: {technique_data['tactics']}
+Platforms: {technique_data['platforms']}
+Domain: {technique_data['domain']}
+
+### SPL Query
+{technique_data['spl_query']}
+
+### SPL Drill Down Query
+{technique_data.get('drill_down_spl', 'No drill down query available')}
+
+### Detection Notes
+{technique_data.get('detection', 'No detection notes available')}
+
+Please analyze this SPL query and:
+1. Tell me what is not covered by the SPL query for detecting this MITRE technique
+2. Identify any mistakes or gaps in the current SPL
+3. Suggest specific changes needed to fully detect this attack technique
+4. Provide recommendations for improving detection coverage"""
+        
+        user_msg = ChatMessage(role=ChatMessageRole.USER, content=user_content)
+        
+        # Call the LLM (replace with your actual model name)
+        response = w.serving_endpoints.query(
+            name="databricks-meta-llama-3-70b-instruct",  # Replace with your model
+            messages=[system_msg, user_msg],
+            temperature=0.1,
+            max_tokens=2048
+        )
+        
+        return response.choices[0].message.content
+        
+    except Exception as e:
+        return f"Error during LLM analysis: {str(e)}"
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Populate Dropdown with MITRE IDs
+
+# COMMAND ----------
+
+# Generate JavaScript to populate the dropdown
+js_code = f"""
+<script>
+const mitreIds = {json.dumps(mitre_id_list)};
+const dropdown = document.getElementById('mitreSelect');
+
+if (dropdown) {{
+    // Clear existing options except the first one
+    dropdown.innerHTML = '<option value="">-- Select a MITRE Technique --</option>';
     
-    # Now you can use mitre_data in your analysis function
+    // Add all MITRE IDs
+    mitreIds.forEach(id => {{
+        const option = document.createElement('option');
+        option.value = id;
+        option.textContent = id;
+        dropdown.appendChild(option);
+    }});
     
-except FileNotFoundError:
-    print("❌ File not found at the specified location")
-except json.JSONDecodeError as e:
-    print(f"❌ Invalid JSON format: {e}")
-except Exception as e:
-    print(f"❌ Error reading file: {e}")
+    console.log('✅ Loaded ' + mitreIds.length + ' MITRE techniques');
+}}
+</script>
+"""
+
+displayHTML(js_code)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Usage Instructions
+# MAGIC 
+# MAGIC 1. **Select a MITRE Technique** from the dropdown above
+# MAGIC 2. **Review the technique information** and SPL query that appears
+# MAGIC 3. **Click "Analyze with LLM"** to get detailed analysis
+# MAGIC 4. **Review the results** to understand coverage gaps and recommendations
+# MAGIC 
+# MAGIC The system will analyze your SPL queries against the MITRE ATT&CK framework and provide specific recommendations for improving detection coverage.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Test Function (Optional)
+
+# COMMAND ----------
+
+# Test the functions with a sample MITRE ID
+if len(mitre_id_list) > 0:
+    sample_id = mitre_id_list[0]
+    print(f"🧪 Testing with sample MITRE ID: {sample_id}")
+    
+    sample_data = get_technique_data(sample_id)
+    print("✅ Sample technique data:")
+    for key, value in sample_data.items():
+        if key == 'spl_query':
+            print(f"  {key}: {str(value)[:100]}..." if len(str(value)) > 100 else f"  {key}: {value}")
+        else:
+            print(f"  {key}: {value}")
+else:
+    print("⚠️ No MITRE IDs found in table")
