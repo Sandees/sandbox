@@ -1,0 +1,36 @@
+import json
+
+# Your file location
+file_path = "/workspace/Users/nanditha.v@shell.com/uc_data.json"
+
+# Read the JSON file
+try:
+    with open(f"/dbfs{file_path}", 'r') as f:
+        mitre_data = json.load(f)
+    
+    print("✅ MITRE data loaded successfully!")
+    print(f"📊 Data type: {type(mitre_data)}")
+    
+    # Display structure info
+    if isinstance(mitre_data, dict):
+        print(f"🔑 Available keys: {list(mitre_data.keys())}")
+        
+        # If it has techniques
+        if 'techniques' in mitre_data:
+            print(f"📈 Number of techniques: {len(mitre_data['techniques'])}")
+        elif 'objects' in mitre_data:
+            print(f"📈 Number of objects: {len(mitre_data['objects'])}")
+            
+    elif isinstance(mitre_data, list):
+        print(f"📈 Number of items: {len(mitre_data)}")
+        if len(mitre_data) > 0:
+            print(f"🔍 First item keys: {list(mitre_data[0].keys()) if isinstance(mitre_data[0], dict) else 'Not a dict'}")
+    
+    # Now you can use mitre_data in your analysis function
+    
+except FileNotFoundError:
+    print("❌ File not found at the specified location")
+except json.JSONDecodeError as e:
+    print(f"❌ Invalid JSON format: {e}")
+except Exception as e:
+    print(f"❌ Error reading file: {e}")
