@@ -1,7 +1,7 @@
 import json
 
 # Your file location
-file_path = "/workspace/Users/nanditha.v@shell.com/uc_data.json"
+file_path = "/workspace/Users/nanditha..com/uc_data.json"
 
 # Read the JSON file
 try:
