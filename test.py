@@ -1,120 +1,59 @@
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC ## Dashboard Display Components
+# Dashboard-Optimized Analysis Display
+import datetime
 
-# COMMAND ----------
-
-# Get current widget values
 selected_mitre = dbutils.widgets.get("mitre_technique")
 analysis_action = dbutils.widgets.get("analyze_action")
-custom_spl = dbutils.widgets.get("custom_spl")
 
-# Only show content if a technique is selected
-if selected_mitre and selected_mitre != "":
+if analysis_action == "Analyze" and selected_mitre:
+    
+    # Clear previous results
+    print("Starting fresh analysis...")
+    
+    # Get technique info
     technique_data = get_technique_data(selected_mitre)
     
     if technique_data:
-        # Display technique information
-        print("=" * 80)
-        print(f"📋 TECHNIQUE INFORMATION: {selected_mitre}")
-        print("=" * 80)
-        print(f"Name: {technique_data['technique_name']}")
-        print(f"Tactic: {technique_data['tactics']}")
-        print(f"Platform: {technique_data['platforms']}")
-        print(f"Domain: {technique_data['domain']}")
-        print(f"Description: {technique_data['description']}")
         
-        # Display SPL Query in a formatted way
-        print("\n" + "=" * 80)
-        print("🔍 SPL QUERY")
-        print("=" * 80)
-        print(technique_data['spl_query'])
+        # Display technique summary for dashboard
+        displayHTML(f"""
+        <div style="background: #e3f2fd; padding: 15px; border-radius: 8px; margin: 10px 0;">
+            <h3>📋 Analyzing: {selected_mitre}</h3>
+            <p><strong>Name:</strong> {technique_data['technique_name']}</p>
+            <p><strong>Status:</strong> 🤖 Running LLM Analysis...</p>
+        </div>
+        """)
         
-        # Display drill-down SPL if available
-        if technique_data.get('drill_down_spl'):
-            print("\n" + "=" * 80)
-            print("🔬 DRILL-DOWN SPL QUERY")
-            print("=" * 80)
-            print(technique_data['drill_down_spl'])
+        # Run analysis
+        analysis_result = analyze_technique_with_llm(selected_mitre)
         
-        # Display detection notes if available
-        if technique_data.get('detection'):
-            print("\n" + "=" * 80)
-            print("📝 DETECTION NOTES")
-            print("=" * 80)
-            print(technique_data['detection'])
-            
+        # Display results in dashboard-friendly format
+        displayHTML(f"""
+        <div style="background: #f8f9fa; border: 2px solid #28a745; border-radius: 10px; padding: 20px; margin: 15px 0;">
+            <h2 style="color: #28a745; margin-bottom: 15px;">🎯 LLM Analysis Results</h2>
+            <div style="background: white; padding: 15px; border-radius: 5px; border-left: 4px solid #28a745;">
+                <pre style="white-space: pre-wrap; font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.5;">{analysis_result}</pre>
+            </div>
+            <div style="margin-top: 15px; padding: 10px; background: #d4edda; border-radius: 5px;">
+                <strong>✅ Analysis completed at:</strong> {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+            </div>
+        </div>
+        """)
+        
+        # Reset action to Ready
+        dbutils.widgets.remove("analyze_action")
+        dbutils.widgets.dropdown("analyze_action", "Ready", 
+                                 ["Ready", "Analyze", "Clear"], 
+                                 "🚀 Analysis Action")
+        
     else:
-        print("❌ No data found for the selected MITRE technique.")
+        print("❌ No data found for selected technique")
+
 else:
-    print("👆 Please select a MITRE technique from the dropdown above to view its details.")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## LLM Analysis Results
-
-# COMMAND ----------
-
-# Handle LLM analysis when action is set to "Analyze"
-if analysis_action == "Analyze" and selected_mitre and selected_mitre != "":
-    
-    print("🤖 STARTING LLM ANALYSIS...")
-    print("=" * 80)
-    print(f"Analyzing MITRE technique: {selected_mitre}")
-    print("This may take a few moments...")
-    print("=" * 80)
-    
-    # Perform LLM analysis
-    analysis_result = analyze_technique_with_llm(selected_mitre)
-    
-    print("\n" + "🎯 LLM ANALYSIS RESULTS")
-    print("=" * 100)
-    print(analysis_result)
-    print("=" * 100)
-    
-    # Show completion message
-    print("\n✅ Analysis completed successfully!")
-    print("💡 Review the recommendations above to improve your SPL query coverage.")
-    
-elif analysis_action == "Analyze" and (not selected_mitre or selected_mitre == ""):
-    print("⚠️ Please select a MITRE technique before running analysis.")
-    
-elif analysis_action == "Clear":
-    print("🧹 Dashboard cleared. Select a new technique to start fresh.")
-    
-else:
-    if selected_mitre and selected_mitre != "":
-        print("🚀 Ready for analysis!")
-        print(f"Selected technique: {selected_mitre}")
-        print("Set the Analysis Action to 'Analyze' to run LLM analysis.")
+    if analysis_action == "Clear":
+        print("🧹 Dashboard cleared")
+    elif selected_mitre:
+        print(f"🚀 Ready to analyze: {selected_mitre}")
     else:
-        print("👆 Select a MITRE technique and set action to 'Analyze' to see LLM analysis results here.")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Dashboard Summary
-
-# COMMAND ----------
-
-# Display current dashboard state
-print("📊 DASHBOARD STATUS")
-print("=" * 50)
-print(f"Selected Technique: {selected_mitre if selected_mitre else 'None'}")
-print(f"Analysis Action: {analysis_action}")
-print(f"Custom SPL: {'Yes' if custom_spl else 'No'}")
-
-if selected_mitre:
-    technique_data = get_technique_data(selected_mitre)
-    if technique_data:
-        print(f"Technique Name: {technique_data['technique_name']}")
-        print(f"SPL Query Length: {len(technique_data['spl_query'])} characters")
-        print("Status: ✅ Ready for analysis")
-    else:
-        print("Status: ❌ No data found")
-else:
-    print("Status: ⏳ Waiting for technique selection")
-
-print("=" * 50)
+        print("👆 Select technique and set action to 'Analyze'")
