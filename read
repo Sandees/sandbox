@@ -14,6 +14,7 @@ Interactive UI to select MITRE techniques from your table and analyze SPL querie
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
 import json
+import base64
 from pyspark.sql import functions as F
 
 # Initialize workspace client
@@ -123,361 +124,372 @@ Please analyze this SPL query and:
 
 # COMMAND ----------
 
-# Store analysis result in global variables to avoid string escaping issues
-analysis_result = ""
-selected_mitre_id = ""
+%md
+## HTML Interface - Part 1 (CSS Styles)
 
-def run_analysis_and_display(mitre_id):
-    """
-    Run analysis and store result globally
-    """
-    global analysis_result, selected_mitre_id
-    selected_mitre_id = mitre_id
-    print(f"🔍 Starting LLM analysis for {mitre_id}...")
-    analysis_result = analyze_technique_with_llm(mitre_id)
-    print("✅ Analysis complete")
-    
-    # Clean the result for safe JavaScript display
-    clean_result = analysis_result.replace('\\', '\\\\').replace('`', '\\`').replace('${', '\\${').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
-    
-    # Display results using a simple approach
-    display_js = f'''
-    <script>
-    function showResults() {{
-        const loading = document.getElementById('loading');
-        const resultsSection = document.getElementById('resultsSection');
-        const resultsContent = document.getElementById('resultsContent');
-        const analyzeBtn = document.getElementById('analyzeBtn');
-        
-        if (loading) loading.style.display = 'none';
-        if (resultsContent) resultsContent.textContent = "{clean_result}";
-        if (resultsSection) resultsSection.style.display = 'block';
-        if (analyzeBtn) analyzeBtn.disabled = false;
-    }}
-    showResults();
-    </script>
-    '''
-    displayHTML(display_js)
+# COMMAND ----------
+
+css_styles = """
+<style>
+    .container {
+        max-width: 1200px;
+        margin: 20px auto;
+        padding: 20px;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    }
+    .header {
+        background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
+        color: white;
+        padding: 25px;
+        border-radius: 10px;
+        text-align: center;
+        margin-bottom: 30px;
+    }
+    .section {
+        background: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 10px;
+        padding: 25px;
+        margin-bottom: 20px;
+    }
+    .dropdown-container {
+        margin-bottom: 20px;
+    }
+    .dropdown-container label {
+        display: block;
+        font-weight: bold;
+        margin-bottom: 8px;
+        color: #2c3e50;
+    }
+    .dropdown {
+        width: 100%;
+        padding: 12px;
+        font-size: 16px;
+        border: 2px solid #bdc3c7;
+        border-radius: 8px;
+        background: white;
+    }
+    .dropdown:focus {
+        border-color: #3498db;
+        outline: none;
+    }
+    .technique-info {
+        background: #e8f4f8;
+        border-left: 4px solid #3498db;
+        padding: 15px;
+        margin: 15px 0;
+        border-radius: 0 8px 8px 0;
+    }
+    .spl-query-box {
+        background: #2c3e50;
+        color: #ecf0f1;
+        padding: 20px;
+        border-radius: 8px;
+        font-family: "Courier New", monospace;
+        font-size: 14px;
+        line-height: 1.4;
+        overflow-x: auto;
+        white-space: pre-wrap;
+        max-height: 300px;
+        overflow-y: auto;
+    }
+    .analyze-btn {
+        background: linear-gradient(135deg, #27ae60, #2ecc71);
+        color: white;
+        border: none;
+        padding: 15px 30px;
+        font-size: 18px;
+        font-weight: bold;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        margin: 20px 0;
+        display: block;
+        width: 100%;
+    }
+    .analyze-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 15px rgba(39, 174, 96, 0.3);
+    }
+    .analyze-btn:disabled {
+        background: #95a5a6;
+        cursor: not-allowed;
+        transform: none;
+    }
+    .loading {
+        display: none;
+        text-align: center;
+        padding: 20px;
+    }
+    .spinner {
+        border: 4px solid #f3f3f3;
+        border-top: 4px solid #3498db;
+        border-radius: 50%;
+        width: 40px;
+        height: 40px;
+        animation: spin 1s linear infinite;
+        margin: 0 auto 15px;
+    }
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    .results-section {
+        display: none;
+        background: #ffffff;
+        border: 2px solid #e9ecef;
+        border-radius: 10px;
+        margin-top: 20px;
+    }
+    .results-header {
+        background: linear-gradient(135deg, #8e44ad, #9b59b6);
+        color: white;
+        padding: 15px 20px;
+        font-weight: bold;
+        font-size: 18px;
+        border-radius: 8px 8px 0 0;
+    }
+    .results-content {
+        padding: 25px;
+        max-height: 500px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        line-height: 1.6;
+    }
+    .hidden {
+        display: none;
+    }
+    .info-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 15px;
+        margin: 15px 0;
+    }
+    .info-item {
+        background: white;
+        padding: 10px;
+        border-radius: 6px;
+        border-left: 3px solid #3498db;
+    }
+    .info-label {
+        font-weight: bold;
+        color: #2c3e50;
+        font-size: 12px;
+        text-transform: uppercase;
+    }
+    .info-value {
+        color: #34495e;
+        margin-top: 5px;
+    }
+</style>
+"""
 
 # COMMAND ----------
 
 %md
-## Interactive MITRE Technique Selector
+## HTML Interface - Part 2 (HTML Structure)
 
 # COMMAND ----------
 
-html_content = '''
-<!DOCTYPE html>
-<html>
-<head>
-    <style>
-        .container {
-            max-width: 1200px;
-            margin: 20px auto;
-            padding: 20px;
-            font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-        }
-        .header {
-            background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
-            color: white;
-            padding: 25px;
-            border-radius: 10px;
-            text-align: center;
-            margin-bottom: 30px;
-        }
-        .section {
-            background: #f8f9fa;
-            border: 1px solid #dee2e6;
-            border-radius: 10px;
-            padding: 25px;
-            margin-bottom: 20px;
-        }
-        .dropdown-container {
-            margin-bottom: 20px;
-        }
-        .dropdown-container label {
-            display: block;
-            font-weight: bold;
-            margin-bottom: 8px;
-            color: #2c3e50;
-        }
-        .dropdown {
-            width: 100%;
-            padding: 12px;
-            font-size: 16px;
-            border: 2px solid #bdc3c7;
-            border-radius: 8px;
-            background: white;
-        }
-        .dropdown:focus {
-            border-color: #3498db;
-            outline: none;
-        }
-        .technique-info {
-            background: #e8f4f8;
-            border-left: 4px solid #3498db;
-            padding: 15px;
-            margin: 15px 0;
-            border-radius: 0 8px 8px 0;
-        }
-        .spl-query-box {
-            background: #2c3e50;
-            color: #ecf0f1;
-            padding: 20px;
-            border-radius: 8px;
-            font-family: "Courier New", monospace;
-            font-size: 14px;
-            line-height: 1.4;
-            overflow-x: auto;
-            white-space: pre-wrap;
-            max-height: 300px;
-            overflow-y: auto;
-        }
-        .analyze-btn {
-            background: linear-gradient(135deg, #27ae60, #2ecc71);
-            color: white;
-            border: none;
-            padding: 15px 30px;
-            font-size: 18px;
-            font-weight: bold;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            margin: 20px 0;
-            display: block;
-            width: 100%;
-        }
-        .analyze-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 15px rgba(39, 174, 96, 0.3);
-        }
-        .analyze-btn:disabled {
-            background: #95a5a6;
-            cursor: not-allowed;
-            transform: none;
-        }
-        .loading {
-            display: none;
-            text-align: center;
-            padding: 20px;
-        }
-        .spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #3498db;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 15px;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        .results-section {
-            display: none;
-            background: #ffffff;
-            border: 2px solid #e9ecef;
-            border-radius: 10px;
-            margin-top: 20px;
-        }
-        .results-header {
-            background: linear-gradient(135deg, #8e44ad, #9b59b6);
-            color: white;
-            padding: 15px 20px;
-            font-weight: bold;
-            font-size: 18px;
-            border-radius: 8px 8px 0 0;
-        }
-        .results-content {
-            padding: 25px;
-            max-height: 500px;
-            overflow-y: auto;
-            white-space: pre-wrap;
-            font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-            line-height: 1.6;
-        }
-        .hidden {
-            display: none;
-        }
-        .info-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 15px;
-            margin: 15px 0;
-        }
-        .info-item {
-            background: white;
-            padding: 10px;
-            border-radius: 6px;
-            border-left: 3px solid #3498db;
-        }
-        .info-label {
-            font-weight: bold;
-            color: #2c3e50;
-            font-size: 12px;
-            text-transform: uppercase;
-        }
-        .info-value {
-            color: #34495e;
-            margin-top: 5px;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>🛡️ MITRE ATT&CK SPL Query Analyzer</h1>
-            <p>Select a MITRE technique to analyze its SPL query</p>
-        </div>
+html_structure = """
+<div class="container">
+    <div class="header">
+        <h1>🛡️ MITRE ATT&CK SPL Query Analyzer</h1>
+        <p>Select a MITRE technique to analyze its SPL query</p>
+    </div>
 
-        <div class="section">
-            <div class="dropdown-container">
-                <label for="mitreSelect">🎯 Select MITRE Technique:</label>
-                <select id="mitreSelect" class="dropdown" onchange="loadTechniqueData()">
-                    <option value="">-- Select a MITRE Technique --</option>
-                </select>
-            </div>
-        </div>
-
-        <div id="techniqueSection" class="section hidden">
-            <h3>📋 Technique Information</h3>
-            <div class="technique-info">
-                <div class="info-grid">
-                    <div class="info-item">
-                        <div class="info-label">Technique Name</div>
-                        <div class="info-value" id="techniqueName">-</div>
-                    </div>
-                    <div class="info-item">
-                        <div class="info-label">Tactic</div>
-                        <div class="info-value" id="techniqueTactic">-</div>
-                    </div>
-                    <div class="info-item">
-                        <div class="info-label">Platform</div>
-                        <div class="info-value" id="techniquePlatform">-</div>
-                    </div>
-                    <div class="info-item">
-                        <div class="info-label">Domain</div>
-                        <div class="info-value" id="techniqueDomain">-</div>
-                    </div>
-                </div>
-                <div style="margin-top: 15px;">
-                    <div class="info-label">Description</div>
-                    <div class="info-value" id="techniqueDescription">-</div>
-                </div>
-            </div>
-        </div>
-
-        <div id="splSection" class="section hidden">
-            <h3>🔍 SPL Query</h3>
-            <div class="spl-query-box" id="splQueryBox">
-                Select a MITRE technique to view its SPL query
-            </div>
-            
-            <button class="analyze-btn" id="analyzeBtn" onclick="analyzeWithLLM()" disabled>
-                🚀 Analyze with LLM
-            </button>
-        </div>
-
-        <div class="loading" id="loading">
-            <div class="spinner"></div>
-            <p>🤖 Analyzing SPL query against MITRE ATT&CK framework...</p>
-        </div>
-
-        <div class="results-section" id="resultsSection">
-            <div class="results-header">
-                🎯 LLM Analysis Results
-            </div>
-            <div class="results-content" id="resultsContent"></div>
+    <div class="section">
+        <div class="dropdown-container">
+            <label for="mitreSelect">🎯 Select MITRE Technique:</label>
+            <select id="mitreSelect" class="dropdown" onchange="loadTechniqueData()">
+                <option value="">-- Select a MITRE Technique --</option>
+            </select>
         </div>
     </div>
 
-    <script>
-        let currentTechniqueData = null;
+    <div id="techniqueSection" class="section hidden">
+        <h3>📋 Technique Information</h3>
+        <div class="technique-info">
+            <div class="info-grid">
+                <div class="info-item">
+                    <div class="info-label">Technique Name</div>
+                    <div class="info-value" id="techniqueName">-</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Tactic</div>
+                    <div class="info-value" id="techniqueTactic">-</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Platform</div>
+                    <div class="info-value" id="techniquePlatform">-</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Domain</div>
+                    <div class="info-value" id="techniqueDomain">-</div>
+                </div>
+            </div>
+            <div style="margin-top: 15px;">
+                <div class="info-label">Description</div>
+                <div class="info-value" id="techniqueDescription">-</div>
+            </div>
+        </div>
+    </div>
 
-        function loadTechniqueData() {
-            const selectedId = document.getElementById("mitreSelect").value;
-            
-            if (!selectedId) {
-                hideAllSections();
-                return;
-            }
+    <div id="splSection" class="section hidden">
+        <h3>🔍 SPL Query</h3>
+        <div class="spl-query-box" id="splQueryBox">
+            Select a MITRE technique to view its SPL query
+        </div>
+        
+        <button class="analyze-btn" id="analyzeBtn" onclick="analyzeWithLLM()" disabled>
+            🚀 Analyze with LLM
+        </button>
+    </div>
 
-            // Call Python to get technique data
-            if (typeof IPython !== "undefined" && IPython.notebook) {
-                IPython.notebook.kernel.execute(`
+    <div class="loading" id="loading">
+        <div class="spinner"></div>
+        <p>🤖 Analyzing SPL query against MITRE ATT&CK framework...</p>
+    </div>
+
+    <div class="results-section" id="resultsSection">
+        <div class="results-header">
+            🎯 LLM Analysis Results
+        </div>
+        <div class="results-content" id="resultsContent"></div>
+    </div>
+</div>
+"""
+
+# COMMAND ----------
+
+%md
+## HTML Interface - Part 3 (JavaScript Functions)
+
+# COMMAND ----------
+
+javascript_code = """
+<script>
+    let currentTechniqueData = null;
+
+    function loadTechniqueData() {
+        const selectedId = document.getElementById("mitreSelect").value;
+        
+        if (!selectedId) {
+            hideAllSections();
+            return;
+        }
+
+        if (typeof IPython !== "undefined" && IPython.notebook) {
+            const code = `
 selected_mitre_id = "${selectedId}"
 technique_data = get_technique_data("${selectedId}")
 print("Selected technique:", selected_mitre_id)
 
-# Display the technique data safely
 if technique_data:
     import json
-    data_json = json.dumps(technique_data)
-    display_code = f'''<script>displayTechniqueData({data_json});</script>'''
-    displayHTML(display_code)
-                `);
-            }
+    import base64
+    data_str = json.dumps(technique_data)
+    data_b64 = base64.b64encode(data_str.encode()).decode()
+    js_display = f'''<script>
+try {{
+    const dataStr = atob("{data_b64}");
+    const data = JSON.parse(dataStr);
+    displayTechniqueData(data);
+}} catch(e) {{
+    console.error("Error displaying data:", e);
+}}
+</script>'''
+    displayHTML(js_display)
+`;
+            IPython.notebook.kernel.execute(code);
+        }
+    }
+
+    function displayTechniqueData(data) {
+        currentTechniqueData = data;
+        
+        document.getElementById("techniqueName").textContent = data.technique_name || "N/A";
+        document.getElementById("techniqueTactic").textContent = data.tactics || "N/A";
+        document.getElementById("techniquePlatform").textContent = data.platforms || "N/A";
+        document.getElementById("techniqueDomain").textContent = data.domain || "N/A";
+        document.getElementById("techniqueDescription").textContent = data.description || "N/A";
+        document.getElementById("splQueryBox").textContent = data.spl_query || "No SPL query available";
+
+        document.getElementById("techniqueSection").classList.remove("hidden");
+        document.getElementById("splSection").classList.remove("hidden");
+        document.getElementById("analyzeBtn").disabled = false;
+        document.getElementById("resultsSection").style.display = "none";
+    }
+
+    function hideAllSections() {
+        document.getElementById("techniqueSection").classList.add("hidden");
+        document.getElementById("splSection").classList.add("hidden");
+        document.getElementById("resultsSection").style.display = "none";
+        document.getElementById("analyzeBtn").disabled = true;
+    }
+
+    function analyzeWithLLM() {
+        if (!currentTechniqueData) {
+            alert("Please select a MITRE technique first");
+            return;
         }
 
-        function displayTechniqueData(data) {
-            if (!data || Object.keys(data).length === 0) {
-                console.error("No technique data received");
-                return;
-            }
+        document.getElementById("loading").style.display = "block";
+        document.getElementById("resultsSection").style.display = "none";
+        document.getElementById("analyzeBtn").disabled = true;
 
-            currentTechniqueData = data;
+        if (typeof IPython !== "undefined" && IPython.notebook) {
+            const code = `
+print("🔍 Starting LLM analysis...")
+analysis_result = analyze_technique_with_llm("${currentTechniqueData.mitre_id}")
+print("✅ Analysis complete")
 
-            // Update technique information
-            document.getElementById("techniqueName").textContent = data.technique_name || "N/A";
-            document.getElementById("techniqueTactic").textContent = data.tactics || "N/A";
-            document.getElementById("techniquePlatform").textContent = data.platforms || "N/A";
-            document.getElementById("techniqueDomain").textContent = data.domain || "N/A";
-            document.getElementById("techniqueDescription").textContent = data.description || "N/A";
-
-            // Update SPL query
-            document.getElementById("splQueryBox").textContent = data.spl_query || "No SPL query available";
-
-            // Show sections
-            document.getElementById("techniqueSection").classList.remove("hidden");
-            document.getElementById("splSection").classList.remove("hidden");
-            document.getElementById("analyzeBtn").disabled = false;
-
-            // Hide results from previous analysis
-            document.getElementById("resultsSection").style.display = "none";
+import base64
+result_b64 = base64.b64encode(analysis_result.encode()).decode()
+js_display = f'''<script>
+try {{
+    const resultStr = atob("{result_b64}");
+    document.getElementById("loading").style.display = "none";
+    document.getElementById("resultsContent").textContent = resultStr;
+    document.getElementById("resultsSection").style.display = "block";
+    document.getElementById("analyzeBtn").disabled = false;
+}} catch(e) {{
+    console.error("Error displaying results:", e);
+    document.getElementById("loading").style.display = "none";
+    document.getElementById("analyzeBtn").disabled = false;
+}}
+</script>'''
+displayHTML(js_display)
+`;
+            IPython.notebook.kernel.execute(code);
         }
+    }
+</script>
+"""
 
-        function hideAllSections() {
-            document.getElementById("techniqueSection").classList.add("hidden");
-            document.getElementById("splSection").classList.add("hidden");
-            document.getElementById("resultsSection").style.display = "none";
-            document.getElementById("analyzeBtn").disabled = true;
-        }
+# COMMAND ----------
 
-        function analyzeWithLLM() {
-            if (!currentTechniqueData) {
-                alert("Please select a MITRE technique first");
-                return;
-            }
+%md
+## Combine and Display HTML Interface
 
-            // Show loading
-            document.getElementById("loading").style.display = "block";
-            document.getElementById("resultsSection").style.display = "none";
-            document.getElementById("analyzeBtn").disabled = true;
+# COMMAND ----------
 
-            // Call Python LLM analysis
-            if (typeof IPython !== "undefined" && IPython.notebook) {
-                IPython.notebook.kernel.execute(`
-run_analysis_and_display("${currentTechniqueData.mitre_id}")
-                `);
-            }
-        }
-    </script>
+# Combine all HTML parts
+complete_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    {css_styles}
+</head>
+<body>
+    {html_structure}
+    {javascript_code}
 </body>
 </html>
-'''
+"""
 
-displayHTML(html_content)
+displayHTML(complete_html)
 
 # COMMAND ----------
 
@@ -486,45 +498,50 @@ displayHTML(html_content)
 
 # COMMAND ----------
 
-# Generate JavaScript to populate the dropdown
-js_code = f"""
-<script>
-const mitreIds = {json.dumps(mitre_id_list)};
-const dropdown = document.getElementById('mitreSelect');
+# Populate dropdown using base64 encoding to avoid syntax issues
+mitre_ids_json = json.dumps(mitre_id_list)
+mitre_ids_b64 = base64.b64encode(mitre_ids_json.encode()).decode()
 
-if (dropdown) {{
-    // Clear existing options except the first one
-    dropdown.innerHTML = '<option value="">-- Select a MITRE Technique --</option>';
-    
-    // Add all MITRE IDs
-    mitreIds.forEach(id => {{
-        const option = document.createElement('option');
-        option.value = id;
-        option.textContent = id;
-        dropdown.appendChild(option);
-    }});
-    
-    console.log('✅ Loaded ' + mitreIds.length + ' MITRE techniques');
-}} else {{
-    console.log('⚠️ Dropdown not found, will retry...');
-    setTimeout(() => {{
-        const retryDropdown = document.getElementById('mitreSelect');
-        if (retryDropdown) {{
-            retryDropdown.innerHTML = '<option value="">-- Select a MITRE Technique --</option>';
-            mitreIds.forEach(id => {{
-                const option = document.createElement('option');
-                option.value = id;
-                option.textContent = id;
-                retryDropdown.appendChild(option);
-            }});
-            console.log('✅ Loaded ' + mitreIds.length + ' MITRE techniques (retry)');
-        }}
-    }}, 1000);
+dropdown_js = f"""
+<script>
+try {{
+    const mitreIdsStr = atob("{mitre_ids_b64}");
+    const mitreIds = JSON.parse(mitreIdsStr);
+    const dropdown = document.getElementById('mitreSelect');
+
+    if (dropdown) {{
+        dropdown.innerHTML = '<option value="">-- Select a MITRE Technique --</option>';
+        
+        mitreIds.forEach(id => {{
+            const option = document.createElement('option');
+            option.value = id;
+            option.textContent = id;
+            dropdown.appendChild(option);
+        }});
+        
+        console.log('✅ Loaded ' + mitreIds.length + ' MITRE techniques');
+    }} else {{
+        setTimeout(() => {{
+            const retryDropdown = document.getElementById('mitreSelect');
+            if (retryDropdown) {{
+                retryDropdown.innerHTML = '<option value="">-- Select a MITRE Technique --</option>';
+                mitreIds.forEach(id => {{
+                    const option = document.createElement('option');
+                    option.value = id;
+                    option.textContent = id;
+                    retryDropdown.appendChild(option);
+                }});
+                console.log('✅ Loaded ' + mitreIds.length + ' MITRE techniques (retry)');
+            }}
+        }}, 1000);
+    }}
+}} catch(e) {{
+    console.error('Error loading MITRE IDs:', e);
 }}
 </script>
 """
 
-displayHTML(js_code)
+displayHTML(dropdown_js)
 
 # COMMAND ----------
 
@@ -537,6 +554,8 @@ displayHTML(js_code)
 4. **Review the results** to understand coverage gaps and recommendations
 
 The system will analyze your SPL queries against the MITRE ATT&CK framework and provide specific recommendations for improving detection coverage.
+
+**Note:** Make sure to replace `"databricks-meta-llama-3-70b-instruct"` with your actual LLM model name in the analyze function.
 
 # COMMAND ----------
 
