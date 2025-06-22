@@ -1,45 +1,46 @@
 # COMMAND ----------
 
-# Dashboard Auto-Refresh for Analysis Results
+# DASHBOARD RESULTS VIEWER - Import this cell to dashboard
+import time
+
 selected_mitre = dbutils.widgets.get("mitre_technique")
 analysis_action = dbutils.widgets.get("analyze_action")
 
-if analysis_action == "Analyze" and selected_mitre and selected_mitre != "":
+# Create a simple status check
+if selected_mitre and selected_mitre != "":
+    technique_data = get_technique_data(selected_mitre)
     
-    # Show progress in dashboard-friendly way
-    print("🤖 LLM Analysis in Progress...")
-    print(f"Analyzing: {selected_mitre}")
-    print("=" * 50)
-    
-    # Run analysis
-    analysis_result = analyze_technique_with_llm(selected_mitre)
-    
-    # Display results in dashboard
-    print("\n🎯 LLM ANALYSIS RESULTS")
-    print("=" * 80)
-    print(analysis_result)
-    print("=" * 80)
-    print("\n✅ Analysis Complete!")
-    
-    # Force widget refresh to show "Ready" state
-    dbutils.widgets.remove("analyze_action")
-    dbutils.widgets.dropdown("analyze_action", "Ready", 
-                             ["Ready", "Analyze", "Clear"], 
-                             "🚀 Analysis Action")
-    
-    # Create a results summary table for dashboard
-    results_summary = [
-        ("Technique", selected_mitre),
-        ("Status", "Analysis Complete"),
-        ("Result Length", f"{len(analysis_result)} characters"),
-        ("Timestamp", str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-    ]
-    
-    df_results = spark.createDataFrame(results_summary, ["Field", "Value"])
-    display(df_results)
-
-elif selected_mitre and selected_mitre != "":
-    print(f"🚀 Ready to analyze: {selected_mitre}")
-    print("Set Analysis Action to 'Analyze' to start")
+    if technique_data:
+        print("="*80)
+        print(f"📋 TECHNIQUE: {selected_mitre}")
+        print("="*80)
+        print(f"Name: {technique_data['technique_name']}")
+        print(f"Tactic: {technique_data['tactics']}")
+        print(f"Platform: {technique_data['platforms']}")
+        print("="*80)
+        print("🔍 SPL QUERY:")
+        print("="*80)
+        print(technique_data['spl_query'])
+        print("="*80)
+        
+        # Show analysis results if analyze was clicked
+        if analysis_action == "Analyze":
+            print("\n🤖 STARTING LLM ANALYSIS...")
+            print("="*80)
+            
+            analysis_result = analyze_technique_with_llm(selected_mitre)
+            
+            print("\n🎯 LLM ANALYSIS RESULTS:")
+            print("="*100)
+            print(analysis_result)
+            print("="*100)
+            print(f"\n✅ Analysis completed at: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+            
+        else:
+            print("\n🚀 Ready for analysis!")
+            print("Set Analysis Action to 'Analyze' to run LLM analysis")
+            
+    else:
+        print("❌ No data found for selected technique")
 else:
-    print("👆 Select a MITRE technique first")
+    print("👆 Please select a MITRE technique from the dropdown")
