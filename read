@@ -36,7 +36,7 @@ print(f"📊 Found {len(mitre_id_list)} unique MITRE IDs")
 
 # COMMAND ----------
 
-%html
+html_content = '''
 <!DOCTYPE html>
 <html>
 <head>
@@ -45,7 +45,7 @@ print(f"📊 Found {len(mitre_id_list)} unique MITRE IDs")
             max-width: 1200px;
             margin: 20px auto;
             padding: 20px;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
         }
         .header {
             background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
@@ -95,7 +95,7 @@ print(f"📊 Found {len(mitre_id_list)} unique MITRE IDs")
             color: #ecf0f1;
             padding: 20px;
             border-radius: 8px;
-            font-family: 'Courier New', monospace;
+            font-family: "Courier New", monospace;
             font-size: 14px;
             line-height: 1.4;
             overflow-x: auto;
@@ -164,7 +164,7 @@ print(f"📊 Found {len(mitre_id_list)} unique MITRE IDs")
             max-height: 500px;
             overflow-y: auto;
             white-space: pre-wrap;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
             line-height: 1.6;
         }
         .hidden {
@@ -264,20 +264,9 @@ print(f"📊 Found {len(mitre_id_list)} unique MITRE IDs")
 
     <script>
         let currentTechniqueData = null;
-        let mitreData = {};
-
-        // Initialize when page loads
-        window.onload = function() {
-            loadMitreIds();
-        };
-
-        function loadMitreIds() {
-            // This will be populated by Python
-            console.log("Loading MITRE IDs...");
-        }
 
         function loadTechniqueData() {
-            const selectedId = document.getElementById('mitreSelect').value;
+            const selectedId = document.getElementById("mitreSelect").value;
             
             if (!selectedId) {
                 hideAllSections();
@@ -285,21 +274,20 @@ print(f"📊 Found {len(mitre_id_list)} unique MITRE IDs")
             }
 
             // Call Python to get technique data
-            IPython.notebook.kernel.execute(`
+            if (typeof IPython !== "undefined" && IPython.notebook) {
+                IPython.notebook.kernel.execute(`
 selected_mitre_id = "${selectedId}"
 technique_data = get_technique_data("${selectedId}")
 print("Selected technique:", selected_mitre_id)
-            `);
 
-            // Show loading and wait for data
-            setTimeout(() => {
-                IPython.notebook.kernel.execute(`
+# Display the technique data
 js_code = f'''
-displayTechniqueData({json.dumps(technique_data) if 'technique_data' in locals() else '{}'});
+displayTechniqueData({json.dumps(technique_data) if technique_data else "{}"});
 '''
+from IPython.display import HTML, display
 display(HTML(f'<script>{js_code}</script>'))
-            `);
-            }, 500);
+                `);
+            }
         }
 
         function displayTechniqueData(data) {
@@ -311,69 +299,71 @@ display(HTML(f'<script>{js_code}</script>'))
             currentTechniqueData = data;
 
             // Update technique information
-            document.getElementById('techniqueName').textContent = data.technique_name || 'N/A';
-            document.getElementById('techniqueTactic').textContent = data.tactics || 'N/A';
-            document.getElementById('techniquePlatform').textContent = data.platforms || 'N/A';
-            document.getElementById('techniqueDomain').textContent = data.domain || 'N/A';
-            document.getElementById('techniqueDescription').textContent = data.description || 'N/A';
+            document.getElementById("techniqueName").textContent = data.technique_name || "N/A";
+            document.getElementById("techniqueTactic").textContent = data.tactics || "N/A";
+            document.getElementById("techniquePlatform").textContent = data.platforms || "N/A";
+            document.getElementById("techniqueDomain").textContent = data.domain || "N/A";
+            document.getElementById("techniqueDescription").textContent = data.description || "N/A";
 
             // Update SPL query
-            document.getElementById('splQueryBox').textContent = data.spl_query || 'No SPL query available';
+            document.getElementById("splQueryBox").textContent = data.spl_query || "No SPL query available";
 
             // Show sections
-            document.getElementById('techniqueSection').classList.remove('hidden');
-            document.getElementById('splSection').classList.remove('hidden');
-            document.getElementById('analyzeBtn').disabled = false;
+            document.getElementById("techniqueSection").classList.remove("hidden");
+            document.getElementById("splSection").classList.remove("hidden");
+            document.getElementById("analyzeBtn").disabled = false;
 
             // Hide results from previous analysis
-            document.getElementById('resultsSection').style.display = 'none';
+            document.getElementById("resultsSection").style.display = "none";
         }
 
         function hideAllSections() {
-            document.getElementById('techniqueSection').classList.add('hidden');
-            document.getElementById('splSection').classList.add('hidden');
-            document.getElementById('resultsSection').style.display = 'none';
-            document.getElementById('analyzeBtn').disabled = true;
+            document.getElementById("techniqueSection").classList.add("hidden");
+            document.getElementById("splSection").classList.add("hidden");
+            document.getElementById("resultsSection").style.display = "none";
+            document.getElementById("analyzeBtn").disabled = true;
         }
 
         function analyzeWithLLM() {
             if (!currentTechniqueData) {
-                alert('Please select a MITRE technique first');
+                alert("Please select a MITRE technique first");
                 return;
             }
 
             // Show loading
-            document.getElementById('loading').style.display = 'block';
-            document.getElementById('resultsSection').style.display = 'none';
-            document.getElementById('analyzeBtn').disabled = true;
+            document.getElementById("loading").style.display = "block";
+            document.getElementById("resultsSection").style.display = "none";
+            document.getElementById("analyzeBtn").disabled = true;
 
             // Call Python LLM analysis
-            IPython.notebook.kernel.execute(`
+            if (typeof IPython !== "undefined" && IPython.notebook) {
+                IPython.notebook.kernel.execute(`
 print("🔍 Starting LLM analysis...")
 analysis_result = analyze_technique_with_llm(selected_mitre_id)
 print("✅ Analysis complete")
-            `);
 
-            // Wait for analysis and display results
-            setTimeout(() => {
-                IPython.notebook.kernel.execute(`
+# Display the results
 js_code = f'''
-showAnalysisResults("""{analysis_result.replace('"""', '')}""");
+showAnalysisResults("""{analysis_result.replace('"""', '').replace('"', '\\\\"')}""");
 '''
+from IPython.display import HTML, display
 display(HTML(f'<script>{js_code}</script>'))
-            `);
-            }, 3000);
+                `);
+            }
         }
 
         function showAnalysisResults(results) {
-            document.getElementById('loading').style.display = 'none';
-            document.getElementById('resultsContent').textContent = results;
-            document.getElementById('resultsSection').style.display = 'block';
-            document.getElementById('analyzeBtn').disabled = false;
+            document.getElementById("loading").style.display = "none";
+            document.getElementById("resultsContent").textContent = results;
+            document.getElementById("resultsSection").style.display = "block";
+            document.getElementById("analyzeBtn").disabled = false;
         }
     </script>
 </body>
 </html>
+'''
+
+displayHTML(html_content)
 
 # COMMAND ----------
 
@@ -400,7 +390,7 @@ def get_technique_data(mitre_id):
                 "domain": technique_row.domain,
                 "spl_query": technique_row.spl_query,
                 "detection": technique_row.detection,
-                "drill_down_spl": technique_row.drill_down_spl if hasattr(technique_row, 'drill_down_spl') else ""
+                "drill_down_spl": getattr(technique_row, 'drill_down_spl', '')
             }
         else:
             return {}
@@ -493,6 +483,21 @@ if (dropdown) {{
     }});
     
     console.log('✅ Loaded ' + mitreIds.length + ' MITRE techniques');
+}} else {{
+    console.log('⚠️ Dropdown not found, will retry...');
+    setTimeout(() => {{
+        const retryDropdown = document.getElementById('mitreSelect');
+        if (retryDropdown) {{
+            retryDropdown.innerHTML = '<option value="">-- Select a MITRE Technique --</option>';
+            mitreIds.forEach(id => {{
+                const option = document.createElement('option');
+                option.value = id;
+                option.textContent = id;
+                retryDropdown.appendChild(option);
+            }});
+            console.log('✅ Loaded ' + mitreIds.length + ' MITRE techniques (retry)');
+        }}
+    }}, 1000);
 }}
 </script>
 """
@@ -527,7 +532,11 @@ if len(mitre_id_list) > 0:
     print("✅ Sample technique data:")
     for key, value in sample_data.items():
         if key == 'spl_query':
-            print(f"  {key}: {str(value)[:100]}..." if len(str(value)) > 100 else f"  {key}: {value}")
+            value_str = str(value)
+            if len(value_str) > 100:
+                print(f"  {key}: {value_str[:100]}...")
+            else:
+                print(f"  {key}: {value}")
         else:
             print(f"  {key}: {value}")
 else:
