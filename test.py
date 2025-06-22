@@ -1,89 +1,120 @@
-# 1. Install the Databricks SDK (if you haven't already)
-#    %pip install databricks-sdk
+# COMMAND ----------
 
-from databricks.sdk import WorkspaceClient
-from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
-import json
+# MAGIC %md
+# MAGIC ## Dashboard Display Components
 
-# 2. Prepare your data (you can also load these from files if you prefer)
-mitre_json = {
-  "ID": "T1098.003",
-  "STIX ID": "attack-pattern--2dbbdcd5-92cf-44c0-aea2-fe24783a6bc3",
-  "name": "Account Manipulation: Additional Cloud Roles",
-  "description": "An adversary may add additional roles or permissions …",
-  "url": "https://attack.mitre.org/techniques/T1098/003",
-  "created": "19 January 2020",
-  "last modified": "15 April 2025",
-  "domain": "enterprise-attack",
-  "version": 2.5,
-  "tactics": "Persistence, Privilege Escalation",
-  "detection": "Collect activity logs from IAM services and cloud administrator accounts …"
-}
+# COMMAND ----------
 
-spl_query = r"""
-index=cloud_infra_aws sourcetype=aws:cloudtrail eventName=AddUserToGroup requestParameters.groupName=*admin*
-| rename userIdentity.arn as arn, userIdentity.userName as src_userName
-| eval arn=mvindex(split(arn,"/"),-1)
-| eval src_userName=coalesce(src_userName,arn)
-| table _cd_time,action,aws_account_id,aws_account_name,awsRegion,status,eventName,sourceIPAddress,userAgent,eventType,
-  src_userName,requestParameters.userName,requestParameters.groupName
-| rename requestParameters.userName as user, sourceIPAddress as src, requestParameters.groupName as group
-| eval dest_user=user
-| eval signature="User was added to group."
-| eval search_title="Access - CRO - AWS New Admin Addition"
-| `RBA_add_uid`
-| `RBA_CE_normalize`
-| `uc_cro_activity_tagging`
-"""
+# Get current widget values
+selected_mitre = dbutils.widgets.get("mitre_technique")
+analysis_action = dbutils.widgets.get("analyze_action")
+custom_spl = dbutils.widgets.get("custom_spl")
 
-read_me = """
-# 1001 AWS New Admin Addition
+# Only show content if a technique is selected
+if selected_mitre and selected_mitre != "":
+    technique_data = get_technique_data(selected_mitre)
+    
+    if technique_data:
+        # Display technique information
+        print("=" * 80)
+        print(f"📋 TECHNIQUE INFORMATION: {selected_mitre}")
+        print("=" * 80)
+        print(f"Name: {technique_data['technique_name']}")
+        print(f"Tactic: {technique_data['tactics']}")
+        print(f"Platform: {technique_data['platforms']}")
+        print(f"Domain: {technique_data['domain']}")
+        print(f"Description: {technique_data['description']}")
+        
+        # Display SPL Query in a formatted way
+        print("\n" + "=" * 80)
+        print("🔍 SPL QUERY")
+        print("=" * 80)
+        print(technique_data['spl_query'])
+        
+        # Display drill-down SPL if available
+        if technique_data.get('drill_down_spl'):
+            print("\n" + "=" * 80)
+            print("🔬 DRILL-DOWN SPL QUERY")
+            print("=" * 80)
+            print(technique_data['drill_down_spl'])
+        
+        # Display detection notes if available
+        if technique_data.get('detection'):
+            print("\n" + "=" * 80)
+            print("📝 DETECTION NOTES")
+            print("=" * 80)
+            print(technique_data['detection'])
+            
+    else:
+        print("❌ No data found for the selected MITRE technique.")
+else:
+    print("👆 Please select a MITRE technique from the dropdown above to view its details.")
 
-*Monitor potentially unwanted additions of users to admin-related groups in AWS.*
+# COMMAND ----------
 
-## Objective
-Highlight when a user is added to a group whose name contains “admin.”
+# MAGIC %md
+# MAGIC ## LLM Analysis Results
 
-## Data Sources
-AWS CloudTrail logs (AddUserToGroup events).
+# COMMAND ----------
 
-https://docs.aws.amazon.com/awscloudtrail/latest/userguide/how-cloudtrail-works.html
+# Handle LLM analysis when action is set to "Analyze"
+if analysis_action == "Analyze" and selected_mitre and selected_mitre != "":
+    
+    print("🤖 STARTING LLM ANALYSIS...")
+    print("=" * 80)
+    print(f"Analyzing MITRE technique: {selected_mitre}")
+    print("This may take a few moments...")
+    print("=" * 80)
+    
+    # Perform LLM analysis
+    analysis_result = analyze_technique_with_llm(selected_mitre)
+    
+    print("\n" + "🎯 LLM ANALYSIS RESULTS")
+    print("=" * 100)
+    print(analysis_result)
+    print("=" * 100)
+    
+    # Show completion message
+    print("\n✅ Analysis completed successfully!")
+    print("💡 Review the recommendations above to improve your SPL query coverage.")
+    
+elif analysis_action == "Analyze" and (not selected_mitre or selected_mitre == ""):
+    print("⚠️ Please select a MITRE technique before running analysis.")
+    
+elif analysis_action == "Clear":
+    print("🧹 Dashboard cleared. Select a new technique to start fresh.")
+    
+else:
+    if selected_mitre and selected_mitre != "":
+        print("🚀 Ready for analysis!")
+        print(f"Selected technique: {selected_mitre}")
+        print("Set the Analysis Action to 'Analyze' to run LLM analysis.")
+    else:
+        print("👆 Select a MITRE technique and set action to 'Analyze' to see LLM analysis results here.")
 
-### Filters
-- eventName=AddUserToGroup
-- requestParameters.groupName=.*admin.*
-"""
+# COMMAND ----------
 
-# 3. Build the chat prompt
-system_msg = ChatMessage(role=ChatMessageRole.SYSTEM, content=(
-    "You are a security-focused assistant. "
-    "Your first task is to review the provided SPL query against the MITRE ATT&CK technique JSON "
-    "and suggest any changes needed to fully detect that technique. "
-    "Your second task is to generate a refined, production-ready README based on the draft."
-))
+# MAGIC %md
+# MAGIC ## Dashboard Summary
 
-user_content = (
-    "### MITRE ATT&CK Technique\n"
-    f"```json\n{json.dumps(mitre_json, indent=2)}\n```\n\n"
-    "### SPL Query\n"
-    f"```spl\n{spl_query}\n```\n\n"
-    "### README Draft\n"
-    f"{read_me}\n\n"
-    "Please:\n"
-    "1. Tell me if the SPL needs any adjustments to match the described technique (and show the updated SPL if so).\n"
-    "2. Generate a polished README that includes all necessary sections (description, technique mapping, query explanation, fields, signature, etc.)."
-)
+# COMMAND ----------
 
-user_msg = ChatMessage(role=ChatMessageRole.USER, content=user_content)
+# Display current dashboard state
+print("📊 DASHBOARD STATUS")
+print("=" * 50)
+print(f"Selected Technique: {selected_mitre if selected_mitre else 'None'}")
+print(f"Analysis Action: {analysis_action}")
+print(f"Custom SPL: {'Yes' if custom_spl else 'No'}")
 
-# 4. Call the LLM
-w = WorkspaceClient()
-response = w.serving_endpoints.query(
-    name="databricks-meta-llama-3-3-70b-instruct",
-    messages=[system_msg, user_msg],
-    temperature=0.1,
-    max_tokens=2048
-)  # 
+if selected_mitre:
+    technique_data = get_technique_data(selected_mitre)
+    if technique_data:
+        print(f"Technique Name: {technique_data['technique_name']}")
+        print(f"SPL Query Length: {len(technique_data['spl_query'])} characters")
+        print("Status: ✅ Ready for analysis")
+    else:
+        print("Status: ❌ No data found")
+else:
+    print("Status: ⏳ Waiting for technique selection")
 
-# 5. Print out what the LLM returns
-print(response.choices[0].message.content)
+print("=" * 50)
