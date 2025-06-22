@@ -32,6 +32,136 @@ print(f"📊 Found {len(mitre_id_list)} unique MITRE IDs")
 # COMMAND ----------
 
 %md
+## Python Functions for Data Handling
+
+# COMMAND ----------
+
+def get_technique_data(mitre_id):
+    """
+    Get technique data for selected MITRE ID
+    """
+    try:
+        # Query the table for the specific MITRE ID
+        technique_row = df.filter(F.col("mitre_id") == mitre_id).first()
+        
+        if technique_row:
+            return {
+                "mitre_id": technique_row.mitre_id,
+                "technique_name": technique_row.technique_name,
+                "description": technique_row.description,
+                "tactics": technique_row.tactics,
+                "platforms": technique_row.platforms,
+                "domain": technique_row.domain,
+                "spl_query": technique_row.spl_query,
+                "detection": technique_row.detection,
+                "drill_down_spl": getattr(technique_row, 'drill_down_spl', '')
+            }
+        else:
+            return {}
+    except Exception as e:
+        print(f"Error getting technique data: {e}")
+        return {}
+
+# COMMAND ----------
+
+def analyze_technique_with_llm(mitre_id):
+    """
+    Analyze the selected technique with LLM
+    """
+    try:
+        # Get the technique data
+        technique_data = get_technique_data(mitre_id)
+        
+        if not technique_data:
+            return "Error: Could not find technique data"
+        
+        # Build the system message
+        system_msg = ChatMessage(role=ChatMessageRole.SYSTEM, content=(
+            "You are a security-focused assistant. "
+            "Your task is to review the provided SPL and drill down SPL query against the MITRE ATT&CK technique "
+            "and tell what is not covered by SPL and any changes needed to fully detect that technique."
+        ))
+        
+        # Build user content with the technique data
+        user_content = f"""### MITRE ATT&CK Technique
+Technique ID: {technique_data['mitre_id']}
+Technique Name: {technique_data['technique_name']}
+Description: {technique_data['description']}
+Tactics: {technique_data['tactics']}
+Platforms: {technique_data['platforms']}
+Domain: {technique_data['domain']}
+
+### SPL Query
+{technique_data['spl_query']}
+
+### SPL Drill Down Query
+{technique_data.get('drill_down_spl', 'No drill down query available')}
+
+### Detection Notes
+{technique_data.get('detection', 'No detection notes available')}
+
+Please analyze this SPL query and:
+1. Tell me what is not covered by the SPL query for detecting this MITRE technique
+2. Identify any mistakes or gaps in the current SPL
+3. Suggest specific changes needed to fully detect this attack technique
+4. Provide recommendations for improving detection coverage"""
+        
+        user_msg = ChatMessage(role=ChatMessageRole.USER, content=user_content)
+        
+        # Call the LLM (replace with your actual model name)
+        response = w.serving_endpoints.query(
+            name="databricks-meta-llama-3-70b-instruct",  # Replace with your model
+            messages=[system_msg, user_msg],
+            temperature=0.1,
+            max_tokens=2048
+        )
+        
+        return response.choices[0].message.content
+        
+    except Exception as e:
+        return f"Error during LLM analysis: {str(e)}"
+
+# COMMAND ----------
+
+# Store analysis result in global variables to avoid string escaping issues
+analysis_result = ""
+selected_mitre_id = ""
+
+def run_analysis_and_display(mitre_id):
+    """
+    Run analysis and store result globally
+    """
+    global analysis_result, selected_mitre_id
+    selected_mitre_id = mitre_id
+    print(f"🔍 Starting LLM analysis for {mitre_id}...")
+    analysis_result = analyze_technique_with_llm(mitre_id)
+    print("✅ Analysis complete")
+    
+    # Clean the result for safe JavaScript display
+    clean_result = analysis_result.replace('\\', '\\\\').replace('`', '\\`').replace('${', '\\${').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
+    
+    # Display results using a simple approach
+    display_js = f'''
+    <script>
+    function showResults() {{
+        const loading = document.getElementById('loading');
+        const resultsSection = document.getElementById('resultsSection');
+        const resultsContent = document.getElementById('resultsContent');
+        const analyzeBtn = document.getElementById('analyzeBtn');
+        
+        if (loading) loading.style.display = 'none';
+        if (resultsContent) resultsContent.textContent = "{clean_result}";
+        if (resultsSection) resultsSection.style.display = 'block';
+        if (analyzeBtn) analyzeBtn.disabled = false;
+    }}
+    showResults();
+    </script>
+    '''
+    displayHTML(display_js)
+
+# COMMAND ----------
+
+%md
 ## Interactive MITRE Technique Selector
 
 # COMMAND ----------
@@ -280,12 +410,12 @@ selected_mitre_id = "${selectedId}"
 technique_data = get_technique_data("${selectedId}")
 print("Selected technique:", selected_mitre_id)
 
-# Display the technique data
-js_code = f'''
-displayTechniqueData({json.dumps(technique_data) if technique_data else "{}"});
-'''
-from IPython.display import HTML, display
-display(HTML(f'<script>{js_code}</script>'))
+# Display the technique data safely
+if technique_data:
+    import json
+    data_json = json.dumps(technique_data)
+    display_code = f'''<script>displayTechniqueData({data_json});</script>'''
+    displayHTML(display_code)
                 `);
             }
         }
@@ -338,25 +468,9 @@ display(HTML(f'<script>{js_code}</script>'))
             // Call Python LLM analysis
             if (typeof IPython !== "undefined" && IPython.notebook) {
                 IPython.notebook.kernel.execute(`
-print("🔍 Starting LLM analysis...")
-analysis_result = analyze_technique_with_llm(selected_mitre_id)
-print("✅ Analysis complete")
-
-# Display the results
-js_code = f'''
-showAnalysisResults("""{analysis_result.replace('"""', '').replace('"', '\\\\"')}""");
-'''
-from IPython.display import HTML, display
-display(HTML(f'<script>{js_code}</script>'))
+run_analysis_and_display("${currentTechniqueData.mitre_id}")
                 `);
             }
-        }
-
-        function showAnalysisResults(results) {
-            document.getElementById("loading").style.display = "none";
-            document.getElementById("resultsContent").textContent = results;
-            document.getElementById("resultsSection").style.display = "block";
-            document.getElementById("analyzeBtn").disabled = false;
         }
     </script>
 </body>
@@ -364,98 +478,6 @@ display(HTML(f'<script>{js_code}</script>'))
 '''
 
 displayHTML(html_content)
-
-# COMMAND ----------
-
-%md
-## Python Functions for Data Handling
-
-# COMMAND ----------
-
-def get_technique_data(mitre_id):
-    """
-    Get technique data for selected MITRE ID
-    """
-    try:
-        # Query the table for the specific MITRE ID
-        technique_row = df.filter(F.col("mitre_id") == mitre_id).first()
-        
-        if technique_row:
-            return {
-                "mitre_id": technique_row.mitre_id,
-                "technique_name": technique_row.technique_name,
-                "description": technique_row.description,
-                "tactics": technique_row.tactics,
-                "platforms": technique_row.platforms,
-                "domain": technique_row.domain,
-                "spl_query": technique_row.spl_query,
-                "detection": technique_row.detection,
-                "drill_down_spl": getattr(technique_row, 'drill_down_spl', '')
-            }
-        else:
-            return {}
-    except Exception as e:
-        print(f"Error getting technique data: {e}")
-        return {}
-
-# COMMAND ----------
-
-def analyze_technique_with_llm(mitre_id):
-    """
-    Analyze the selected technique with LLM
-    """
-    try:
-        # Get the technique data
-        technique_data = get_technique_data(mitre_id)
-        
-        if not technique_data:
-            return "Error: Could not find technique data"
-        
-        # Build the system message
-        system_msg = ChatMessage(role=ChatMessageRole.SYSTEM, content=(
-            "You are a security-focused assistant. "
-            "Your task is to review the provided SPL and drill down SPL query against the MITRE ATT&CK technique "
-            "and tell what is not covered by SPL and any changes needed to fully detect that technique."
-        ))
-        
-        # Build user content with the technique data
-        user_content = f"""### MITRE ATT&CK Technique
-Technique ID: {technique_data['mitre_id']}
-Technique Name: {technique_data['technique_name']}
-Description: {technique_data['description']}
-Tactics: {technique_data['tactics']}
-Platforms: {technique_data['platforms']}
-Domain: {technique_data['domain']}
-
-### SPL Query
-{technique_data['spl_query']}
-
-### SPL Drill Down Query
-{technique_data.get('drill_down_spl', 'No drill down query available')}
-
-### Detection Notes
-{technique_data.get('detection', 'No detection notes available')}
-
-Please analyze this SPL query and:
-1. Tell me what is not covered by the SPL query for detecting this MITRE technique
-2. Identify any mistakes or gaps in the current SPL
-3. Suggest specific changes needed to fully detect this attack technique
-4. Provide recommendations for improving detection coverage"""
-        
-        user_msg = ChatMessage(role=ChatMessageRole.USER, content=user_content)
-        
-        # Call the LLM (replace with your actual model name)
-        response = w.serving_endpoints.query(
-            name="databricks-meta-llama-3-70b-instruct",  # Replace with your model
-            messages=[system_msg, user_msg],
-            temperature=0.1,
-            max_tokens=2048
-        )
-        
-        return response.choices[0].message.content
-        
-    except Exception as e:
-        return f"Error during LLM analysis: {str(e)}"
 
 # COMMAND ----------
 
