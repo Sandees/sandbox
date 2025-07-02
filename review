@@ -1,0 +1,158 @@
+import os
+import json
+import re
+from pathlib import Path
+
+def extract_mitre_codes_from_folders(archive_path):
+    """
+    Extract MITRE ATT&CK codes from settings.json files in archive folders.
+    
+    Args:
+        archive_path (str): Path to the archive directory containing folders
+        
+    Returns:
+        dict: Dictionary with folder names as keys and list of MITRE codes as values
+    """
+    mitre_codes_dict = {}
+    
+    # Convert to Path object for easier handling
+    archive_dir = Path(archive_path)
+    
+    if not archive_dir.exists():
+        print(f"Archive directory does not exist: {archive_path}")
+        return mitre_codes_dict
+    
+    # Iterate through all subdirectories in the archive folder
+    for folder_path in archive_dir.iterdir():
+        if folder_path.is_dir():
+            folder_name = folder_path.name
+            settings_file = folder_path / "settings.json"
+            
+            if settings_file.exists():
+                try:
+                    # Read and parse the JSON file
+                    with open(settings_file, 'r', encoding='utf-8') as file:
+                        data = json.load(file)
+                    
+                    # Extract MITRE codes from annotations
+                    mitre_codes = extract_mitre_codes_from_json(data)
+                    
+                    if mitre_codes:
+                        mitre_codes_dict[folder_name] = mitre_codes
+                        print(f"Found {len(mitre_codes)} MITRE codes in '{folder_name}': {mitre_codes}")
+                    else:
+                        print(f"No MITRE codes found in '{folder_name}'")
+                        mitre_codes_dict[folder_name] = []
+                        
+                except json.JSONDecodeError as e:
+                    print(f"Error parsing JSON in '{folder_name}': {e}")
+                    mitre_codes_dict[folder_name] = []
+                except Exception as e:
+                    print(f"Error processing '{folder_name}': {e}")
+                    mitre_codes_dict[folder_name] = []
+            else:
+                print(f"settings.json not found in '{folder_name}'")
+                mitre_codes_dict[folder_name] = []
+    
+    return mitre_codes_dict
+
+def extract_mitre_codes_from_json(json_data):
+    """
+    Extract MITRE ATT&CK codes from JSON data.
+    
+    Args:
+        json_data (dict): Parsed JSON data
+        
+    Returns:
+        list: List of unique MITRE ATT&CK codes
+    """
+    mitre_codes = []
+    
+    # Pattern to match MITRE ATT&CK codes (T followed by 4 digits, optionally followed by .001, .002, etc.)
+    mitre_pattern = r'T\d{4}(?:\.\d{3})?'
+    
+    # Look for action.correlationsearch.annotations
+    try:
+        annotations = json_data.get('action.correlationsearch.annotations', '')
+        
+        if annotations:
+            # Find all MITRE codes in the annotations string
+            found_codes = re.findall(mitre_pattern, annotations)
+            mitre_codes.extend(found_codes)
+    
+    except Exception as e:
+        print(f"Error extracting MITRE codes: {e}")
+    
+    # Remove duplicates and return sorted list
+    return sorted(list(set(mitre_codes)))
+
+def save_results_to_file(mitre_dict, output_file="mitre_codes_results.json"):
+    """
+    Save the results to a JSON file.
+    
+    Args:
+        mitre_dict (dict): Dictionary with folder names and MITRE codes
+        output_file (str): Output filename
+    """
+    try:
+        with open(output_file, 'w', encoding='utf-8') as file:
+            json.dump(mitre_dict, file, indent=2, ensure_ascii=False)
+        print(f"Results saved to '{output_file}'")
+    except Exception as e:
+        print(f"Error saving results: {e}")
+
+def print_summary(mitre_dict):
+    """
+    Print a summary of the extracted MITRE codes.
+    
+    Args:
+        mitre_dict (dict): Dictionary with folder names and MITRE codes
+    """
+    print("\n" + "="*60)
+    print("MITRE ATT&CK CODES EXTRACTION SUMMARY")
+    print("="*60)
+    
+    total_folders = len(mitre_dict)
+    folders_with_codes = sum(1 for codes in mitre_dict.values() if codes)
+    total_unique_codes = len(set(code for codes in mitre_dict.values() for code in codes))
+    
+    print(f"Total folders processed: {total_folders}")
+    print(f"Folders with MITRE codes: {folders_with_codes}")
+    print(f"Total unique MITRE codes found: {total_unique_codes}")
+    
+    print(f"\nDetailed results:")
+    for folder_name, codes in mitre_dict.items():
+        if codes:
+            print(f"  {folder_name}: {codes}")
+        else:
+            print(f"  {folder_name}: No codes found")
+    
+    # Show all unique codes found
+    all_codes = set(code for codes in mitre_dict.values() for code in codes)
+    if all_codes:
+        print(f"\nAll unique MITRE codes found: {sorted(all_codes)}")
+
+# Main execution
+if __name__ == "__main__":
+    # Set the path to your archive directory
+    # Update this path to match your actual archive location
+    archive_path = "myarchive"  # Change this to your actual path
+    
+    print("Starting MITRE ATT&CK code extraction...")
+    print(f"Processing archive directory: {archive_path}")
+    
+    # Extract MITRE codes from all folders
+    results = extract_mitre_codes_from_folders(archive_path)
+    
+    # Print summary
+    print_summary(results)
+    
+    # Save results to file
+    save_results_to_file(results)
+    
+    print(f"\nExtraction complete!")
+    
+    # Example of how to access the results
+    print(f"\nExample usage of results:")
+    print(f"Access codes for a specific folder: results['folder_name']")
+    print(f"Results dictionary: {results}")
