@@ -156,3 +156,322 @@ if __name__ == "__main__":
     print(f"\nExample usage of results:")
     print(f"Access codes for a specific folder: results['folder_name']")
     print(f"Results dictionary: {results}")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import pandas as pd
+import json
+from pathlib import Path
+
+def load_mitre_codes_json(json_file_path):
+    """
+    Load the MITRE codes JSON file created by the previous script.
+    
+    Args:
+        json_file_path (str): Path to the JSON file containing folder names and MITRE codes
+        
+    Returns:
+        dict: Dictionary with folder names as keys and MITRE code lists as values
+    """
+    try:
+        with open(json_file_path, 'r', encoding='utf-8') as file:
+            return json.load(file)
+    except FileNotFoundError:
+        print(f"JSON file not found: {json_file_path}")
+        return {}
+    except json.JSONDecodeError as e:
+        print(f"Error parsing JSON file: {e}")
+        return {}
+
+def load_mitre_excel(excel_file_path):
+    """
+    Load the MITRE ATT&CK Excel file.
+    
+    Args:
+        excel_file_path (str): Path to the Excel file
+        
+    Returns:
+        pandas.DataFrame: DataFrame containing MITRE ATT&CK data
+    """
+    try:
+        # Try to read the Excel file
+        df = pd.read_excel(excel_file_path)
+        print(f"Successfully loaded Excel file with {len(df)} rows")
+        print(f"Columns: {list(df.columns)}")
+        return df
+    except FileNotFoundError:
+        print(f"Excel file not found: {excel_file_path}")
+        return pd.DataFrame()
+    except Exception as e:
+        print(f"Error loading Excel file: {e}")
+        return pd.DataFrame()
+
+def match_and_enrich_data(mitre_codes_dict, mitre_df):
+    """
+    Match MITRE codes with Excel data and create enriched JSON.
+    
+    Args:
+        mitre_codes_dict (dict): Dictionary with folder names and MITRE codes
+        mitre_df (pandas.DataFrame): DataFrame with MITRE ATT&CK data
+        
+    Returns:
+        dict: Enriched dictionary with detailed MITRE information
+    """
+    enriched_data = {}
+    
+    # Create a mapping of ID to row data for faster lookup
+    id_to_data = {}
+    for _, row in mitre_df.iterrows():
+        technique_id = str(row.get('ID', '')).strip()
+        if technique_id:
+            # Convert row to dictionary and handle NaN values
+            row_dict = row.to_dict()
+            # Replace NaN values with empty strings or appropriate defaults
+            for key, value in row_dict.items():
+                if pd.isna(value):
+                    row_dict[key] = ""
+                elif isinstance(value, (int, float)) and not pd.isna(value):
+                    row_dict[key] = value
+                else:
+                    row_dict[key] = str(value)
+            
+            id_to_data[technique_id] = row_dict
+    
+    print(f"Created lookup table with {len(id_to_data)} MITRE techniques")
+    
+    # Process each folder and its MITRE codes
+    for folder_name, mitre_codes in mitre_codes_dict.items():
+        enriched_data[folder_name] = {
+            'mitre_codes': mitre_codes,
+            'techniques': [],
+            'summary': {
+                'total_codes': len(mitre_codes),
+                'matched_codes': 0,
+                'unmatched_codes': []
+            }
+        }
+        
+        for code in mitre_codes:
+            if code in id_to_data:
+                technique_data = id_to_data[code].copy()
+                enriched_data[folder_name]['techniques'].append(technique_data)
+                enriched_data[folder_name]['summary']['matched_codes'] += 1
+                print(f"✓ Matched {code} in folder '{folder_name}'")
+            else:
+                enriched_data[folder_name]['summary']['unmatched_codes'].append(code)
+                print(f"✗ No match found for {code} in folder '{folder_name}'")
+    
+    return enriched_data
+
+def save_enriched_json(enriched_data, output_file):
+    """
+    Save the enriched data to a JSON file.
+    
+    Args:
+        enriched_data (dict): Enriched data dictionary
+        output_file (str): Output filename
+    """
+    try:
+        with open(output_file, 'w', encoding='utf-8') as file:
+            json.dump(enriched_data, file, indent=2, ensure_ascii=False)
+        print(f"Enriched data saved to '{output_file}'")
+    except Exception as e:
+        print(f"Error saving enriched data: {e}")
+
+def print_enrichment_summary(enriched_data):
+    """
+    Print a summary of the enrichment process.
+    
+    Args:
+        enriched_data (dict): Enriched data dictionary
+    """
+    print("\n" + "="*70)
+    print("MITRE ATT&CK DATA ENRICHMENT SUMMARY")
+    print("="*70)
+    
+    total_folders = len(enriched_data)
+    total_codes = sum(data['summary']['total_codes'] for data in enriched_data.values())
+    total_matched = sum(data['summary']['matched_codes'] for data in enriched_data.values())
+    total_unmatched = total_codes - total_matched
+    
+    print(f"Total folders processed: {total_folders}")
+    print(f"Total MITRE codes: {total_codes}")
+    print(f"Successfully matched: {total_matched}")
+    print(f"Unmatched codes: {total_unmatched}")
+    print(f"Match rate: {(total_matched/total_codes*100):.1f}%" if total_codes > 0 else "N/A")
+    
+    print(f"\nDetailed results by folder:")
+    for folder_name, data in enriched_data.items():
+        summary = data['summary']
+        print(f"\n  📁 {folder_name}:")
+        print(f"    Total codes: {summary['total_codes']}")
+        print(f"    Matched: {summary['matched_codes']}")
+        print(f"    Unmatched: {len(summary['unmatched_codes'])}")
+        
+        if summary['unmatched_codes']:
+            print(f"    Unmatched codes: {summary['unmatched_codes']}")
+        
+        # Show sample of matched techniques
+        if data['techniques']:
+            print(f"    Sample techniques:")
+            for i, technique in enumerate(data['techniques'][:2]):  # Show first 2
+                print(f"      • {technique.get('ID', 'N/A')}: {technique.get('name', 'N/A')}")
+            if len(data['techniques']) > 2:
+                print(f"      ... and {len(data['techniques']) - 2} more")
+
+def create_summary_report(enriched_data, output_file="mitre_summary_report.json"):
+    """
+    Create a summary report with aggregated statistics.
+    
+    Args:
+        enriched_data (dict): Enriched data dictionary
+        output_file (str): Output filename for summary report
+    """
+    summary_report = {
+        'overview': {
+            'total_folders': len(enriched_data),
+            'total_mitre_codes': sum(data['summary']['total_codes'] for data in enriched_data.values()),
+            'total_matched_codes': sum(data['summary']['matched_codes'] for data in enriched_data.values()),
+            'match_rate_percentage': 0
+        },
+        'technique_frequency': {},
+        'tactic_distribution': {},
+        'platform_distribution': {},
+        'folders_summary': {}
+    }
+    
+    # Calculate match rate
+    if summary_report['overview']['total_mitre_codes'] > 0:
+        summary_report['overview']['match_rate_percentage'] = round(
+            (summary_report['overview']['total_matched_codes'] / 
+             summary_report['overview']['total_mitre_codes']) * 100, 1
+        )
+    
+    # Analyze technique frequency and tactics
+    for folder_name, data in enriched_data.items():
+        summary_report['folders_summary'][folder_name] = data['summary']
+        
+        for technique in data['techniques']:
+            tech_id = technique.get('ID', '')
+            tech_name = technique.get('name', '')
+            tactics = technique.get('tactics', '')
+            platforms = technique.get('platforms', '')
+            
+            # Count technique frequency
+            if tech_id:
+                if tech_id not in summary_report['technique_frequency']:
+                    summary_report['technique_frequency'][tech_id] = {
+                        'name': tech_name,
+                        'count': 0,
+                        'folders': []
+                    }
+                summary_report['technique_frequency'][tech_id]['count'] += 1
+                summary_report['technique_frequency'][tech_id]['folders'].append(folder_name)
+            
+            # Count tactic distribution
+            if tactics:
+                tactic_list = [t.strip() for t in str(tactics).split(',')]
+                for tactic in tactic_list:
+                    if tactic:
+                        summary_report['tactic_distribution'][tactic] = summary_report['tactic_distribution'].get(tactic, 0) + 1
+            
+            # Count platform distribution
+            if platforms:
+                platform_list = [p.strip() for p in str(platforms).split(',')]
+                for platform in platform_list:
+                    if platform:
+                        summary_report['platform_distribution'][platform] = summary_report['platform_distribution'].get(platform, 0) + 1
+    
+    # Sort by frequency
+    summary_report['technique_frequency'] = dict(sorted(
+        summary_report['technique_frequency'].items(), 
+        key=lambda x: x[1]['count'], 
+        reverse=True
+    ))
+    
+    summary_report['tactic_distribution'] = dict(sorted(
+        summary_report['tactic_distribution'].items(), 
+        key=lambda x: x[1], 
+        reverse=True
+    ))
+    
+    summary_report['platform_distribution'] = dict(sorted(
+        summary_report['platform_distribution'].items(), 
+        key=lambda x: x[1], 
+        reverse=True
+    ))
+    
+    # Save summary report
+    try:
+        with open(output_file, 'w', encoding='utf-8') as file:
+            json.dump(summary_report, file, indent=2, ensure_ascii=False)
+        print(f"Summary report saved to '{output_file}'")
+    except Exception as e:
+        print(f"Error saving summary report: {e}")
+
+# Main execution
+if __name__ == "__main__":
+    # File paths - update these to match your actual file locations
+    mitre_codes_json_file = "mitre_codes_results.json"  # Output from previous script
+    excel_file_path = "mitre_attack_codes.xlsx"  # Your Excel file - update this name
+    enriched_output_file = "mitre_enriched_data.json"
+    
+    print("Starting MITRE ATT&CK data enrichment process...")
+    
+    # Load the MITRE codes JSON
+    print(f"\n1. Loading MITRE codes from: {mitre_codes_json_file}")
+    mitre_codes_dict = load_mitre_codes_json(mitre_codes_json_file)
+    
+    if not mitre_codes_dict:
+        print("No MITRE codes data found. Make sure to run the extraction script first.")
+        exit(1)
+    
+    # Load the Excel file
+    print(f"\n2. Loading Excel file: {excel_file_path}")
+    mitre_df = load_mitre_excel(excel_file_path)
+    
+    if mitre_df.empty:
+        print("No data loaded from Excel file. Please check the file path and format.")
+        exit(1)
+    
+    # Match and enrich the data
+    print(f"\n3. Matching MITRE codes with Excel data...")
+    enriched_data = match_and_enrich_data(mitre_codes_dict, mitre_df)
+    
+    # Save enriched data
+    print(f"\n4. Saving enriched data...")
+    save_enriched_json(enriched_data, enriched_output_file)
+    
+    # Create and save summary report
+    print(f"\n5. Creating summary report...")
+    create_summary_report(enriched_data)
+    
+    # Print summary
+    print_enrichment_summary(enriched_data)
+    
+    print(f"\n🎉 Enrichment complete!")
+    print(f"📄 Enriched data: {enriched_output_file}")
+    print(f"📊 Summary report: mitre_summary_report.json")
+    
+    # Example of how to access enriched data
+    print(f"\n💡 Example usage:")
+    print(f"# Load enriched data")
+    print(f"with open('{enriched_output_file}', 'r') as f:")
+    print(f"    data = json.load(f)")
+    print(f"# Access techniques for a folder")
+    print(f"folder_techniques = data['folder_name']['techniques']")
+    print(f"# Access technique details")
+    print(f"technique_name = folder_techniques[0]['name']")
+    print(f"technique_description = folder_techniques[0]['description']")
